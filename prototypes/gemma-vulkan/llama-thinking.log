@@ -1,0 +1,15 @@
+MESA: warning: Support for this platform is experimental with Xe KMD, bug reports may be ignored.
+0.00.060.277 I cmn  common_param: common_params_print_info: verbosity = 3 (adjust with the `-lv N` CLI arg)
+0.00.061.379 W srv  llama_server: -----------------
+0.00.061.381 W srv  llama_server: CORS is set to allow all origins ('*') and no API key is set
+0.00.061.382 W srv  llama_server: this can be a security risk (cross-origin attacks)
+0.00.061.382 W srv  llama_server: more info: https://github.com/ggml-org/llama.cpp/pull/25655
+0.00.061.382 W srv  llama_server: -----------------
+0.00.062.587 I srv    load_model: loading model '/home/aditya/.cache/huggingface/hub/models--google--gemma-4-E2B-it-qat-q4_0-gguf/snapshots/675cff42a74c774d6cb76f76d8eacb49b48c9b93/gemma-4-E2B_q4_0-it.gguf'
+0.01.192.339 W load: control-looking token:    212 '</s>' was not control-type; this is probably a bug in the model. its type will be overridden
+0.01.192.988 W load: control-looking token:     50 '<|tool_response>' was not control-type; this is probably a bug in the model. its type will be overridden
+0.01.236.422 W load: special_eog_ids contains '<|tool_response>', removing '</s>' token from EOG list
+0.02.059.279 I srv    load_model: initializing, n_slots = 4, n_ctx_slot = 8192, kv_unified = 'true'
+0.02.065.811 I srv  llama_server: model loaded
+0.02.065.816 I srv  llama_server: listening on http://127.0.0.1:8081
+2.00.091.156 I srv    operator(): operator(): cleaning up before exit...
