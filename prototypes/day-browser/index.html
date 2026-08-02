@@ -128,7 +128,7 @@
   .track .hours{position:absolute; inset:0; pointer-events:none}
   .track .hours div{position:absolute; top:0; bottom:0; width:1px; background:var(--line); opacity:.7}
   .track .segs{position:absolute; inset:0; display:flex}
-  .track .seg{height:100%; opacity:.6; border-right:1px solid rgb(0 0 0/.3)}
+  .track .seg{height:100%; opacity:.6; border-right:1px solid rgb(0 0 0/.3); transition:opacity var(--m-fast)}
   .track .dots{position:absolute; inset:0; pointer-events:none}
   .track .dot{position:absolute; width:4px; height:4px; border-radius:50%; background:rgb(233 237 245/.55);
     top:50%; transform:translate(-50%,-50%); transition:background var(--m-fast)}
@@ -204,6 +204,48 @@
   @keyframes pulse{0%,100%{opacity:.25}50%{opacity:1}}
   .kbd{display:inline-flex; align-items:center; justify-content:center; min-width:22px; height:22px; padding:0 6px;
     border:1px solid var(--line); border-bottom-width:2px; border-radius:var(--r-sm); font-size:11px; color:var(--text-dim); font-family:var(--ff)}
+
+  /* --- view toggle (timeline / grid) --- */
+  .viewtoggle{display:flex; gap:2px; background:var(--surface-2); border:1px solid var(--line); border-radius:var(--r-pill); padding:2px}
+  .viewtoggle .btn{border:0; border-radius:var(--r-pill); padding:6px 14px; font-size:12px; color:var(--text-dim); background:transparent}
+  .viewtoggle .btn:hover{border:0; color:var(--text)}
+  .viewtoggle .btn.active{background:var(--accent); color:#0b1220; font-weight:650}
+  .timelineview{flex:1; display:flex; flex-direction:column; min-height:0}
+  .timelineview.hidden{display:none}
+  .gridview{flex:1; display:none; flex-direction:column; min-height:0}
+  .gridview.show{display:flex}
+  .gridhead{display:flex; align-items:center; gap:10px; padding:12px 20px 0}
+  .gridlist{flex:1; overflow-y:auto; padding:16px 20px; display:grid; grid-template-columns:repeat(auto-fill, minmax(200px, 1fr)); gap:14px; align-content:start}
+  .griditem{cursor:pointer; border-radius:var(--r-md); overflow:hidden; border:1px solid var(--line); background:var(--surface-2); transition:border-color var(--m-fast), transform var(--m-fast)}
+  .griditem:hover{border-color:var(--accent); transform:translateY(-2px)}
+  .griditem img{width:100%; aspect-ratio:16/9; object-fit:cover; display:block}
+  .griditem .gi-meta{padding:8px 10px}
+  .griditem .gi-t{font-size:11px; font-weight:650; font-variant-numeric:tabular-nums; display:flex; align-items:center; justify-content:space-between}
+  .griditem .gi-a{font-size:11px; color:var(--text-dim); margin-top:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+
+  /* --- app breakdown --- */
+  .apps{display:flex; flex-direction:column; gap:6px}
+  .approw{display:flex; align-items:center; gap:10px; padding:8px 10px; border:1px solid transparent; border-radius:var(--r-md); cursor:pointer; transition:border-color var(--m-fast), background var(--m-fast)}
+  .approw:hover{background:var(--surface-2)}
+  .approw.active{border-color:var(--accent); background:var(--surface-2)}
+  .approw .sw{width:10px; height:10px; border-radius:3px; flex:0 0 auto}
+  .approw .nm{font-size:12px; font-weight:600; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+  .approw .pct{font-size:11px; color:var(--text-faint); font-variant-numeric:tabular-nums; margin-left:8px}
+  .approw .bar{height:4px; border-radius:2px; background:var(--surface); overflow:hidden; margin-top:4px}
+  .approw .bar i{display:block; height:100%; border-radius:2px}
+  .track .seg.dim{opacity:.12}
+  .track .dot.muted{opacity:.15}
+
+  /* --- fullscreen overlay --- */
+  .fs{position:fixed; inset:0; z-index:200; background:rgb(5 7 10/.96); display:none; align-items:center; justify-content:center; cursor:zoom-out}
+  .fs.show{display:flex}
+  .fs img{max-width:94vw; max-height:94vh; object-fit:contain; border-radius:var(--r-md); box-shadow:var(--e2)}
+  .fs .cap{position:absolute; bottom:22px; left:50%; transform:translateX(-50%); background:rgb(8 11 16/.85); border:1px solid var(--line); border-radius:var(--r-pill); padding:7px 16px; font-size:12px; display:flex; gap:12px; align-items:center}
+
+  /* --- capture density strip --- */
+  .density{height:14px; margin-top:8px; display:flex; align-items:flex-end; gap:1px}
+  .density .b{flex:1; background:var(--accent); opacity:.35; border-radius:1px 1px 0 0}
+  .density .b.hot{opacity:.9}
 </style>
 </head>
 <body>
@@ -219,26 +261,38 @@
     <input class="input" id="q" type="text" placeholder="Search your memory…" autocomplete="off" spellcheck="false">
     <div class="results" id="results"></div>
   </div>
+  <div class="viewtoggle" id="viewtoggle">
+    <button class="btn active" data-view="timeline">Timeline</button>
+    <button class="btn" data-view="grid">Grid</button>
+  </div>
   <button class="btn ghost" id="musbtn" title="Today's soundtrack">♪ <span>Soundtrack</span></button>
 </div>
 
 <div class="stage">
   <div class="main">
-    <div class="preview" id="preview"><span class="empty muted">loading…</span></div>
-    <div class="scrubwrap">
-      <div class="ruler" id="ruler"></div>
-      <div class="track" id="track">
-        <div class="hours"></div>
-        <div class="segs" id="segs"></div>
-        <div class="dots" id="dots"></div>
-        <div class="caret" id="caret"><span class="pill" id="caretpill"></span></div>
-        <div class="playhead" id="playhead"></div>
+    <div class="timelineview" id="timelineview">
+      <div class="preview" id="preview"><span class="empty muted">loading…</span></div>
+      <div class="scrubwrap">
+        <div class="ruler" id="ruler"></div>
+        <div class="track" id="track">
+          <div class="hours"></div>
+          <div class="segs" id="segs"></div>
+          <div class="dots" id="dots"></div>
+          <div class="caret" id="caret"><span class="pill" id="caretpill"></span></div>
+          <div class="playhead" id="playhead"></div>
+        </div>
+        <div class="density" id="density"></div>
+        <div class="scrubbar">
+          <span class="time" id="ctime">–:––</span>
+          <span class="muted t-sm" id="cmeta">drag or click to scrub</span>
+          <span class="range" id="crange"></span>
+        </div>
       </div>
-      <div class="scrubbar">
-        <span class="time" id="ctime">–:––</span>
-        <span class="muted t-sm" id="cmeta">drag or click to scrub</span>
-        <span class="range" id="crange"></span>
-      </div>
+    </div>
+
+    <div class="gridview" id="gridview">
+      <div class="gridhead"><span class="muted t-sm" id="gridinfo"></span></div>
+      <div class="gridlist" id="gridlist"></div>
     </div>
   </div>
 
@@ -246,7 +300,11 @@
     <h2>How your day went</h2>
     <div class="recap-card" id="recap"></div>
 
-    <h2>Now</h2>
+    <h2>Apps</h2>
+    <div class="apps" id="apps"></div>
+
+    <h2 style="display:flex; align-items:center; justify-content:space-between">Now
+      <button class="btn ghost" id="copyocr" title="copy this frame's OCR text">⧉ Copy OCR</button></h2>
     <div class="t-tl" id="wintitle">—</div>
     <div class="frame-meta" id="winmeta"></div>
     <div class="ocr" id="ocr">—</div>
@@ -256,6 +314,7 @@
       Click the strip to jump. <span class="kbd">←</span><span class="kbd">→</span> step one frame.
       Hover or drag to open a frame preview that peeks up from the bar, like a video scrubber.
       Colored bands = apps; dots = captures; <span class="chip dim">hits</span> = your search.
+      Click a frame to view it fullscreen. Click an app to filter the timeline.
     </p>
   </div>
 </div>
@@ -273,6 +332,8 @@
   <div class="app" id="peekapp">—</div>
   <div class="caret"></div>
 </div>
+
+<div class="fs" id="fs"><img id="fsimg" alt=""><div class="cap" id="fscap"></div></div>
 
 <script>
 /* ============ embedded data snapshot (grabbed from live API) ============ */
@@ -315,6 +376,7 @@ function playingAt(ts){
 const playingStarts = TRACKS.filter(t=>t.status==='Playing');
 const musicBlock = t => t.title ? `${t.artist ? t.artist+' — ' : ''}${t.title}` : '(unknown track)';
 const posOf = f => frames.indexOf(f) / (frames.length - 1) * 100;
+const fracT = ts => (new Date(ts)-new Date(t0))/dur;
 function frameNear(ts){
   let best = frames[0], bd = Infinity;
   for(const f of frames){ const d = Math.abs(new Date(f.ts) - new Date(ts)); if(d < bd){ bd = d; best = f; } }
@@ -331,6 +393,52 @@ function frameNear(ts){
     `<div class="t"><span>${esc(top[0].split(' ')[0])}</span> set the pace</div>
      <p>You spent most of the day in ${esc(top.join(', '))}.${songs?` ${songs} distinct songs carried the background from ${f0} to ${f1}.`:''}</p>
      <div class="foot">generated at 23:00 by the Gemma pipe · this is a synthesized stand-in</div>`;
+})();
+
+/* ---------- app breakdown (click to filter the timeline) ---------- */
+let appFilter = null;
+(function(){
+  const c = {};
+  for(const f of frames) c[f.window_class] = (c[f.window_class]||0) + 1;
+  const rows = Object.entries(c).sort((a,b)=>b[1]-a[1]);
+  const max = rows[0][1];
+  $('#apps').innerHTML = rows.map(([cls,n])=>`
+    <div class="approw" data-app="${esc(cls)}">
+      <span class="sw" style="background:${clsColor(cls)}"></span>
+      <div style="flex:1; min-width:0">
+        <div style="display:flex; align-items:baseline">
+          <span class="nm">${esc(cls)}</span>
+          <span class="pct">${Math.round(n/frames.length*100)}% · ${n}</span>
+        </div>
+        <div class="bar"><i style="width:${n/max*100}%;background:${clsColor(cls)}"></i></div>
+      </div>
+    </div>`).join('');
+  $('#apps').addEventListener('click', e => {
+    const row = e.target.closest('.approw');
+    if(!row) return;
+    const app = row.dataset.app;
+    appFilter = appFilter === app ? null : app;
+    document.querySelectorAll('.approw').forEach(r=>r.classList.toggle('active', r.dataset.app===appFilter));
+    applyAppFilter();
+  });
+})();
+function applyAppFilter(){
+  document.querySelectorAll('.seg').forEach(s=>s.classList.toggle('dim', !!appFilter && s.title !== appFilter));
+  document.querySelectorAll('.track .dot').forEach(d=>{
+    const f = frames[+d.dataset.i];
+    d.classList.toggle('hit', !!appFilter && f.window_class === appFilter);
+    d.classList.toggle('muted', !!appFilter && f.window_class !== appFilter);
+  });
+}
+
+/* ---------- capture density (time-linear, shows where captures cluster) ---------- */
+(function(){
+  const NB = 48;
+  const bins = new Array(NB).fill(0);
+  for(const f of frames) bins[Math.min(Math.floor(fracT(f.ts)*NB), NB-1)]++;
+  const max = Math.max(...bins, 1);
+  $('#density').innerHTML = bins.map(n=>
+    `<div class="b" style="height:${Math.max(n? n/max*100 : 4, 4)}%"></div>`).join('');
 })();
 
 /* ---------- render scrubber ---------- */
@@ -350,14 +458,14 @@ const rulerEl = $('#ruler');
 
 /* colored segment bands (app runs along the capture axis, tiled by frame count) */
 $('#segs').innerHTML = chapters().map(ch=>
-  `<div class="seg" style="flex:${ch.frames.length} 1 0;background:${clsColor(ch.cls)}" title="${esc(ch.cls)}"></div>`
+  `<div class="seg" data-app="${esc(ch.cls)}" style="flex:${ch.frames.length} 1 0;background:${clsColor(ch.cls)}" title="${esc(ch.cls)}"></div>`
 ).join('');
 
 /* capture dots + search hits */
 function paintDots(hits){
-  $('#dots').innerHTML = frames.map(f=>{
+  $('#dots').innerHTML = frames.map((f,i)=>{
     const h = hits && hits.has(f.id);
-    return `<div class="dot${h?' hit':''}" style="left:${posOf(f)}%"></div>`;
+    return `<div class="dot${h?' hit':''}" data-i="${i}" style="left:${posOf(f)}%"></div>`;
   }).join('');
 }
 paintDots(null);
@@ -471,6 +579,7 @@ track.addEventListener('pointercancel', () => { dragging = false; hidePeek(); })
 
 /* keyboard stepping */
 window.addEventListener('keydown', e => {
+  if(e.key==='Escape'){ fs.classList.remove('show'); return; }
   const tag = document.activeElement.tagName;
   if(tag==='INPUT' || tag==='TEXTAREA' || document.activeElement.isContentEditable) return;
   const idx = frames.findIndex(f=>f.id===sel.id);
@@ -506,6 +615,7 @@ function runSearch(){
   resEl.querySelectorAll('.r').forEach(r=>r.addEventListener('click',()=>{
     select(frames.find(f=>f.id===+r.dataset.id));
     resEl.classList.remove('show');
+    setView('timeline');
   }));
 }
 qEl.addEventListener('input', runSearch);
@@ -528,6 +638,68 @@ $('#musbtn').addEventListener('click', () => {
 });
 $('#musclose').addEventListener('click', ()=>dlg.close());
 dlg.addEventListener('click', e => { if(e.target===dlg) dlg.close(); });
+
+/* ---------- storyboard grid ---------- */
+const gridlist = $('#gridlist');
+(function(){
+  gridlist.innerHTML = frames.map((f,i)=>`
+    <div class="griditem" data-i="${i}">
+      <img src="${imgOf(f)}" alt="" loading="lazy">
+      <div class="gi-meta">
+        <div class="gi-t"><span>${fmtS(f.ts)}</span><span style="color:${clsColor(f.window_class)}">●</span></div>
+        <div class="gi-a">${esc(f.window_class)}${f.window_title?' · '+esc(f.window_title):''}</div>
+      </div>
+    </div>`).join('');
+  $('#gridinfo').textContent = `${frames.length} captures · ${fmt(t0)} – ${fmt(t1)}`;
+  gridlist.addEventListener('click', e => {
+    const item = e.target.closest('.griditem');
+    if(!item) return;
+    select(frames[+item.dataset.i]);
+    setView('timeline');
+  });
+})();
+
+/* ---------- view toggle ---------- */
+function setView(v){
+  $('#timelineview').classList.toggle('hidden', v!=='timeline');
+  $('#gridview').classList.toggle('show', v==='grid');
+  document.querySelectorAll('#viewtoggle .btn').forEach(b=>b.classList.toggle('active', b.dataset.view===v));
+}
+document.querySelectorAll('#viewtoggle .btn').forEach(b=>b.addEventListener('click', ()=>setView(b.dataset.view)));
+
+/* ---------- fullscreen frame ---------- */
+const fs = $('#fs'), fsimg = $('#fsimg'), fscap = $('#fscap');
+previewEl.addEventListener('click', e => {
+  if(e.target !== pimg && e.target !== pcap) return;
+  fsimg.src = pimg.src;
+  fscap.innerHTML = pcap.innerHTML;
+  fs.classList.add('show');
+});
+fs.addEventListener('click', ()=>fs.classList.remove('show'));
+
+/* ---------- copy OCR ---------- */
+function copyText(txt, done){
+  if(navigator.clipboard && window.isSecureContext){
+    navigator.clipboard.writeText(txt).then(done, ()=>fallbackCopy(txt, done));
+  } else fallbackCopy(txt, done);
+}
+function fallbackCopy(txt, done){
+  const ta = document.createElement('textarea');
+  ta.value = txt; ta.setAttribute('readonly',''); ta.style.cssText = 'position:fixed;opacity:0';
+  document.body.appendChild(ta); ta.select();
+  document.execCommand('copy');
+  document.body.removeChild(ta);
+  done();
+}
+$('#copyocr').addEventListener('click', () => {
+  const txt = (sel && sel.ocr_text) || '';
+  if(!txt) return;
+  copyText(txt, () => {
+    const b = $('#copyocr');
+    b.textContent = '✓ Copied';
+    setTimeout(()=>{ b.textContent = '⧉ Copy OCR'; }, 1200);
+  });
+});
 
 /* day nav (prototype: single day of data) */
 $('#prevday').addEventListener('click', ()=>alert('prototype: previous day — needs the /days index + order=desc endpoints from the build ticket.'));
