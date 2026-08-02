@@ -110,7 +110,8 @@
 
   /* --- preview --- */
   .preview{flex:1; display:flex; align-items:center; justify-content:center; position:relative; overflow:hidden; background:var(--bg)}
-  .preview img{max-width:96%; max-height:calc(100% - 44px); object-fit:contain; border-radius:var(--r-md); box-shadow:var(--e1)}
+  .preview img{max-width:96%; max-height:calc(100% - 44px); object-fit:contain; border-radius:var(--r-md); box-shadow:var(--e1); transition:opacity var(--m-fast)}
+  .preview img.loading{opacity:.3}
   .preview .cap{position:absolute; bottom:14px; left:50%; transform:translateX(-50%);
     background:rgb(8 11 16/.85); border:1px solid var(--line); border-radius:var(--r-pill);
     padding:7px 16px; display:flex; gap:12px; align-items:center; font-size:12px; white-space:nowrap; backdrop-filter:blur(6px)}
@@ -119,27 +120,45 @@
 
   /* --- scrubber --- */
   .scrubwrap{background:var(--surface); border-top:1px solid var(--line); padding:14px 20px 16px}
-  .ruler{display:flex; justify-content:space-between; color:var(--text-faint); font-size:10px;
-    font-variant-numeric:tabular-nums; padding:0 2px 6px; letter-spacing:.5px}
-  .track{position:relative; height:64px; background:var(--surface-2); border:1px solid var(--line);
+  .ruler{position:relative; color:var(--text-faint); font-size:10px;
+    font-variant-numeric:tabular-nums; padding:0 2px 6px; letter-spacing:.5px; height:14px}
+  .ruler span{position:absolute; top:0; transform:translateX(-50%)}
+  .track{position:relative; height:56px; background:var(--surface-2); border:1px solid var(--line);
     border-radius:var(--r-md); overflow:hidden; cursor:pointer; touch-action:none; user-select:none}
+  .track .hours{position:absolute; inset:0; pointer-events:none}
+  .track .hours div{position:absolute; top:0; bottom:0; width:1px; background:var(--line); opacity:.7}
   .track .segs{position:absolute; inset:0; display:flex}
-  .track .seg{height:100%; opacity:.55; border-right:1px solid rgb(0 0 0/.25)}
+  .track .seg{height:100%; opacity:.6; border-right:1px solid rgb(0 0 0/.3)}
   .track .dots{position:absolute; inset:0; pointer-events:none}
-  .track .dot{position:absolute; width:3px; height:3px; border-radius:50%; background:rgb(255 255 255/.35);
+  .track .dot{position:absolute; width:4px; height:4px; border-radius:50%; background:rgb(233 237 245/.55);
     top:50%; transform:translate(-50%,-50%); transition:background var(--m-fast)}
-  .track .dot.hit{background:var(--warn); box-shadow:0 0 6px var(--warn); width:5px; height:5px}
-  .track .playhead{position:absolute; top:0; bottom:0; width:2px; background:var(--accent);
-    box-shadow:0 0 8px var(--accent); pointer-events:none}
-  .track .playhead::before{content:""; position:absolute; top:-5px; left:50%; transform:translateX(-50%);
-    border:6px solid transparent; border-top-color:var(--accent)}
-  .track .playhead::after{content:""; position:absolute; bottom:-5px; left:50%; transform:translateX(-50%);
-    border:6px solid transparent; border-bottom-color:var(--accent)}
-  .tooltip{position:fixed; z-index:90; pointer-events:none; background:var(--surface-2);
-    border:1px solid var(--line); border-radius:var(--r-md); box-shadow:var(--e2);
-    padding:8px; width:190px; opacity:0; transform:translateY(6px); transition:opacity var(--m-fast), transform var(--m-fast)}
-  .tooltip img{width:100%; height:96px; object-fit:cover; border-radius:var(--r-sm); margin-bottom:6px}
-  .tooltip.show{opacity:1; transform:translateY(0)}
+  .track .dot.hit{background:var(--warn); box-shadow:0 0 6px var(--warn); width:6px; height:6px}
+  .track .playhead{position:absolute; top:0; bottom:0; width:3px; background:var(--accent);
+    box-shadow:0 0 10px var(--accent); pointer-events:none}
+  .track .playhead::after{content:""; position:absolute; top:-2px; left:50%; transform:translateX(-50%);
+    width:16px; height:9px; border-radius:4px 4px 2px 2px; background:var(--accent); box-shadow:0 0 10px var(--accent)}
+  /* cursor caret + live time pill while scrubbing */
+  .track .caret{position:absolute; top:0; bottom:0; width:2px; background:var(--text); opacity:0;
+    pointer-events:none; transition:opacity var(--m-fast)}
+  .track .caret.show{opacity:.9}
+  .track .caret .pill{position:absolute; top:4px; left:50%; transform:translateX(-50%); white-space:nowrap;
+    font-size:11px; font-weight:650; font-variant-numeric:tabular-nums; letter-spacing:.3px; color:var(--text);
+    background:var(--bg); border:1px solid var(--line); border-radius:var(--r-pill); padding:2px 8px;
+    box-shadow:var(--e0)}
+  /* YouTube-style preview peeking up from the timeline bar */
+  .peek{position:fixed; z-index:90; pointer-events:none; width:300px; opacity:0;
+    transform:translateY(10px); transition:opacity 120ms ease-out, transform 120ms ease-out}
+  .peek.show{opacity:1; transform:translateY(0)}
+  .peek .frame{position:relative; background:#000; border:1px solid var(--line); border-radius:var(--r-md);
+    overflow:hidden; box-shadow:var(--e2); aspect-ratio:16/9}
+  .peek .frame img{width:100%; height:100%; object-fit:cover}
+  .peek .time{position:absolute; left:8px; bottom:8px; font-size:11px; font-weight:700; color:#fff;
+    font-variant-numeric:tabular-nums; letter-spacing:.4px; background:rgb(0 0 0/.72);
+    border-radius:var(--r-pill); padding:3px 9px; backdrop-filter:blur(4px)}
+  .peek .app{margin-top:6px; font-size:11px; color:var(--text-dim); white-space:nowrap;
+    overflow:hidden; text-overflow:ellipsis}
+  .peek .caret{position:absolute; top:100%; width:0; height:0; border:7px solid transparent;
+    border-top-color:var(--accent); filter:drop-shadow(0 1px 2px rgb(0 0 0/.5))}
   .scrubbar{display:flex; align-items:center; gap:14px; margin-top:12px}
   .scrubbar .time{font-variant-numeric:tabular-nums; font-size:13px; font-weight:650; min-width:96px}
   .scrubbar .range{margin-left:auto; color:var(--text-faint); font-size:11px; font-variant-numeric:tabular-nums}
@@ -209,8 +228,10 @@
     <div class="scrubwrap">
       <div class="ruler" id="ruler"></div>
       <div class="track" id="track">
+        <div class="hours"></div>
         <div class="segs" id="segs"></div>
         <div class="dots" id="dots"></div>
+        <div class="caret" id="caret"><span class="pill" id="caretpill"></span></div>
         <div class="playhead" id="playhead"></div>
       </div>
       <div class="scrubbar">
@@ -233,7 +254,7 @@
     <h2>About the scrubber</h2>
     <p class="muted t-sm" style="line-height:1.7">
       Click the strip to jump. <span class="kbd">←</span><span class="kbd">→</span> step one frame.
-      Hover for a preview, drag to scrub like a video.
+      Hover or drag to open a frame preview that peeks up from the bar, like a video scrubber.
       Colored bands = apps; dots = captures; <span class="chip dim">hits</span> = your search.
     </p>
   </div>
@@ -247,7 +268,11 @@
   <div class="dlg-body" id="muslist"></div>
 </dialog>
 
-<div class="tooltip" id="tip"><img id="tipimg" alt=""><div id="tiptext"></div></div>
+<div class="peek" id="peek">
+  <div class="frame"><img id="peekimg" alt=""><span class="time" id="peektime">–:––:––</span></div>
+  <div class="app" id="peekapp">—</div>
+  <div class="caret"></div>
+</div>
 
 <script>
 /* ============ embedded data snapshot (grabbed from live API) ============ */
@@ -289,7 +314,12 @@ function playingAt(ts){
 }
 const playingStarts = TRACKS.filter(t=>t.status==='Playing');
 const musicBlock = t => t.title ? `${t.artist ? t.artist+' — ' : ''}${t.title}` : '(unknown track)';
-const frac = ts => (new Date(ts)-new Date(t0))/dur;
+const posOf = f => frames.indexOf(f) / (frames.length - 1) * 100;
+function frameNear(ts){
+  let best = frames[0], bd = Infinity;
+  for(const f of frames){ const d = Math.abs(new Date(f.ts) - new Date(ts)); if(d < bd){ bd = d; best = f; } }
+  return best;
+}
 
 /* ---------- synthesized recap ---------- */
 (function(){
@@ -313,89 +343,131 @@ const rulerEl = $('#ruler');
     const m=new Date(t0); m.setHours(h,0,0,0);
     if(m>=new Date(t0)) marks.push(m);
   });
-  rulerEl.innerHTML = marks.map(m=>`<span>${m.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}</span>`).join('');
+  rulerEl.innerHTML = marks.map(m=>`<span style="left:${posOf(frameNear(m))}%">${m.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}</span>`).join('');
+  $('#track .hours').innerHTML = marks.map(m=>`<div style="left:${posOf(frameNear(m))}%"></div>`).join('');
+  $('#crange').textContent = `${fmt(t0)} – ${fmt(t1)}`;
 })();
 
-/* colored segment bands */
-$('#segs').innerHTML = chapters().map(ch=>{
-  const a=frac(ch.frames[0].ts), b=frac(ch.frames[ch.frames.length-1].ts);
-  const d=ch.frames.length>1 ? ch.frames[1].ts-ch.frames[0].ts : 0;
-  return `<div class="seg" style="flex:${b-a} 1 0;background:${clsColor(ch.cls)}" title="${esc(ch.cls)}"></div>`;
-}).join('');
+/* colored segment bands (app runs along the capture axis, tiled by frame count) */
+$('#segs').innerHTML = chapters().map(ch=>
+  `<div class="seg" style="flex:${ch.frames.length} 1 0;background:${clsColor(ch.cls)}" title="${esc(ch.cls)}"></div>`
+).join('');
 
 /* capture dots + search hits */
 function paintDots(hits){
   $('#dots').innerHTML = frames.map(f=>{
     const h = hits && hits.has(f.id);
-    return `<div class="dot${h?' hit':''}" style="left:${frac(f.ts)*100}%"></div>`;
+    return `<div class="dot${h?' hit':''}" style="left:${posOf(f)}%"></div>`;
   }).join('');
 }
 paintDots(null);
 
 /* ---------- selection state ---------- */
 let sel = frames[frames.length-1];
-let hits = null;         // Set of frame ids matching current search
+let selId = null;         // null forces first render
+let hits = null;          // Set of frame ids matching current search
 let query = '';
 
-function select(f){
+/* persistent preview img + caption (no DOM teardown while scrubbing) */
+const previewEl = $('#preview');
+const pimg = document.createElement('img');
+pimg.alt = 'frame';
+const pcap = document.createElement('div');
+pcap.className = 'cap';
+previewEl.innerHTML = '';
+previewEl.append(pimg, pcap);
+pimg.onload = () => pimg.classList.remove('loading');
+
+const warmCache = new Map();   // frame id -> Image (background preload)
+function warm(f){
+  if(!f || warmCache.has(f.id)) return;
+  const im = new Image(); im.src = imgOf(f); warmCache.set(f.id, im);
+}
+
+function select(f, rapid){
+  const changed = f.id !== selId;
   sel = f;
-  $('#wintitle').textContent = f.window_title || '(untitled window)';
-  $('#winmeta').innerHTML = `
-    <span class="chip">${fmt(f.ts)}</span>
-    <span class="chip">${esc(f.window_class)}</span>
-    ${f.fullscreen?'<span class="chip dim">fullscreen</span>':''}`;
-  $('#ocr').textContent = f.ocr_text || 'no OCR text captured';
-  const mus = playingAt(f.ts);
-  const capMus = mus ? `<span class="chip mus">♪ ${esc(musicBlock(mus))}</span>` : '';
-  $('#preview').innerHTML = `<img src="${imgOf(f)}" alt="frame"><div class="cap"><b>${fmt(f.ts)}</b> <span class="muted">${esc(f.window_class)}</span>${capMus}</div>`;
+  if(changed){
+    selId = f.id;
+    $('#wintitle').textContent = f.window_title || '(untitled window)';
+    $('#winmeta').innerHTML = `
+      <span class="chip">${fmt(f.ts)}</span>
+      <span class="chip">${esc(f.window_class)}</span>
+      ${f.fullscreen?'<span class="chip dim">fullscreen</span>':''}`;
+    $('#ocr').textContent = f.ocr_text || 'no OCR text captured';
+    const mus = playingAt(f.ts);
+    const capMus = mus ? `<span class="chip mus">♪ ${esc(musicBlock(mus))}</span>` : '';
+    pimg.classList.add('loading');
+    pimg.src = imgOf(f);
+    pcap.innerHTML = `<b>${fmt(f.ts)}</b> <span class="muted">${esc(f.window_class)}</span>${capMus}`;
+    const i = frames.findIndex(x=>x.id===f.id);
+    warm(frames[i-1]); warm(frames[i+1]);
+  }
   $('#ctime').textContent = fmtS(f.ts);
   $('#cmeta').textContent = `${f.window_class}${f.window_title?' · '+esc(f.window_title):''}`.slice(0,70);
-  const ph = $('#playhead');
-  ph.style.left = `${frac(f.ts)*100}%`;
+  $('#playhead').style.left = `${posOf(f)}%`;
 }
 
 /* ---------- scrubber interactions ---------- */
 const track = $('#track');
+const peek = $('#peek'), peekImgEl = $('#peekimg'), peekTime = $('#peektime'), peekApp = $('#peekapp');
+const caret = $('#caret'), caretPill = $('#caretpill');
 let dragging = false;
-const tip = $('#tip'), tipImg = $('#tipimg'), tipText = $('#tiptext');
+let tipFrame = null;
+const PEEK_W = 300;
 
 function frameAtX(clientX){
   const r = track.getBoundingClientRect();
   const x = Math.min(Math.max(clientX - r.left, 0), r.width);
   const ts = new Date(new Date(t0).getTime() + (x/r.width)*dur);
-  let best = frames[0], bd = Infinity;
-  for(const f of frames){
-    const d = Math.abs(new Date(f.ts) - ts);
-    if(d < bd){ bd = d; best = f; }
-  }
-  return {f:best, x};
+  const i = Math.round(x / r.width * (frames.length - 1));
+  return {f: frames[Math.min(Math.max(i, 0), frames.length-1)], x, ts};
 }
 function seek(clientX){
   const {f} = frameAtX(clientX);
-  select(f);
+  select(f, true);
 }
-function showTip(clientX){
-  const {f} = frameAtX(clientX);
-  tipImg.src = imgOf(f);
-  tipText.innerHTML = `<b>${fmtS(f.ts)}</b> · <span class="muted">${esc(f.window_class)}</span>`;
-  const w = 190, h = 140;
-  const x = Math.min(clientX + 14, window.innerWidth - w - 12);
-  const y = Math.max(track.getBoundingClientRect().top - h - 12, 8);
-  tip.style.left = x+'px'; tip.style.top = y+'px';
-  tip.classList.add('show');
+function positionPeek(clientX){
+  const {f, ts} = frameAtX(clientX);
+  const r = track.getBoundingClientRect();
+  const left = Math.max(8, Math.min(clientX - PEEK_W/2, window.innerWidth - PEEK_W - 8));
+  peek.style.left = left + 'px';
+  peek.style.top = (r.top - 8 - peek.offsetHeight) + 'px';
+  if(f.id !== (tipFrame && tipFrame.id)){
+    tipFrame = f;
+    peekImgEl.src = imgOf(f);
+    peekTime.textContent = fmtS(f.ts);
+    peekApp.textContent = `${f.window_class}${f.window_title?' · '+f.window_title:''}`.slice(0,48);
+  }
+  peek.querySelector('.caret').style.left = (clientX - left - 7) + 'px';
+  peek.classList.add('show');
+  caret.style.left = `${posOf(f)}%`;
+  caretPill.textContent = fmtS(ts);
+  caret.classList.add('show');
 }
+function hidePeek(){
+  peek.classList.remove('show');
+  caret.classList.remove('show');
+  tipFrame = null;
+}
+peekImgEl.onload = () => peekImgEl.classList.remove('loading');
 track.addEventListener('pointerdown', e => {
   dragging = true;
-  track.setPointerCapture(e.pointerId);
+  try{ track.setPointerCapture(e.pointerId); }catch(_){}
   seek(e.clientX);
 });
 track.addEventListener('pointermove', e => {
-  if(dragging){ seek(e.clientX); }
-  else { showTip(e.clientX); }
+  positionPeek(e.clientX);
+  if(dragging) seek(e.clientX);
 });
-track.addEventListener('pointerup', e => { dragging = false; });
-track.addEventListener('pointerleave', () => { if(!dragging) tip.classList.remove('show'); });
-track.addEventListener('pointercancel', () => { dragging = false; tip.classList.remove('show'); });
+track.addEventListener('pointerup', e => {
+  dragging = false;
+  const r = track.getBoundingClientRect();
+  const inside = e.clientX>=r.left && e.clientX<=r.right && e.clientY>=r.top && e.clientY<=r.bottom;
+  if(!inside) hidePeek();
+});
+track.addEventListener('pointerleave', () => { if(!dragging) hidePeek(); });
+track.addEventListener('pointercancel', () => { dragging = false; hidePeek(); });
 
 /* keyboard stepping */
 window.addEventListener('keydown', e => {
