@@ -1,88 +1,106 @@
 ---
-title: Heimdall — Local Gemma 4 + LangGraph on Hyprland
+title: Heimdall v1 — local screen memory on Hyprland
 ---
 flowchart TB
     subgraph HYPR["🪟 Hyprland (Wayland)"]
         direction LR
-        IPC["socket2 events<br/>activewindow · workspace<br/>openwindow · fullscreen"]
-        MON["monitors<br/>grim -o (all outputs)"]
-        WINMETA["hyprctl activewindow<br/>class · title · workspace"]
+        IPC["socket2 events<br/>activewindow · workspace · openwindow<br/>fullscreen · windowtitle"]
+        WINMETA["hyprctl activewindow<br/>class · title · geometry"]
+        MPRIS["MPRIS (playerctl)<br/>track change · play/pause"]
     end
 
     subgraph CAP["📡 Capture daemon — Python (event-driven)"]
         direction LR
-        TRIG["Event Trigger<br/>debounce + throttle"]
-        SHOT["grim screenshot → JPEG<br/>~300KB / frame"]
-        OCR["tesseract OCR<br/>ENG text layer"]
+        TRIG["Event Trigger<br/>debounce 1.5s · keepalive 5min<br/>screencast excluded"]
+        SHOT["grim -g active-window region<br/>JPEG q80 · ~280KB"]
+        OCR["tesseract OCR (worker queue)<br/>ENG · ~4.3s/frame"]
     end
 
     subgraph DB["💾 SQLite + FTS5 — ~/.heimdall/"]
         direction LR
-        FRAMES["frames table<br/>ts · monitor · window · path"]
-        TEXTS["texts table<br/>FTS5 full-text index<br/>ocr content"]
+        FRAMES["frames table<br/>ts · class · title · path · ocr"]
+        TRACKS["tracks table<br/>MPRIS play/pause spans"]
+        EVENTS["events table<br/>raw socket2 log"]
+        FTS["frames_fts<br/>FTS5 external content<br/>ocr + title + class"]
     end
 
-    subgraph API["🔌 FastAPI — localhost:3030"]
+    subgraph API["🔌 FastAPI — 127.0.0.1:3030"]
         direction LR
-        SEARCH["/search?q="]
-        FRAMES_EP["/frames?window=&range="]
+        SEARCH["/search?q=&window_class=…"]
+        FRAMES_EP["/frames · /frames/{id}/image"]
         HEALTH["/health"]
-        PIPES_EP["/pipes/run/{name}"]
+        PIPES_EP["POST /pipes/run/{name}"]
+        SCHED["APScheduler<br/>recap 23:00 · breakdown 23:05"]
     end
 
-    subgraph LG["🤖 LangGraph — Pipes (scheduled agents)"]
+    subgraph PIPES["🧩 Pipes — plain functions"]
         direction LR
-        GRAPH["StateGraph per pipe<br/>load → summarize → output"]
-        SCHED["APScheduler / cron<br/>day-recap · time-breakdown"]
+        RECAP["day recap<br/>load → prompt → completion<br/>→ parse → render → write"]
+        BREAK["time breakdown<br/>hybrid rules+LLM · spans"]
     end
 
     subgraph LLM["🧠 llama-server :8080"]
         direction LR
-        GEMMA["Gemma 4 E2B QAT<br/>QAT-Q4_0 (3.2 GB) · 12B upgrade<br/>Vulkan → Intel Arc"]
-        OPENAI["OpenAI-compatible API<br/>/v1/chat/completions"]
+        GEMMA["Gemma 4 E2B QAT Q4_0<br/>Vulkan-only · temp 0 · --reasoning off"]
+        OPENAI["OpenAI-compatible<br/>/v1/chat/completions<br/>response_format json_object"]
     end
 
-    subgraph CLIENT["🧑‍💻 Interfaces"]
+    subgraph OBS["👁 Langfuse (self-hosted, optional)"]
         direction LR
-        CLI["CLI<br/>heimdall search · recap · breakdown"]
-        WEB["web UI (optional later)<br/>timeline + search"]
+        TRACE["@observe pipe runs<br/>completions · parse errors"]
+    end
+
+    subgraph CLIENT["🧑‍💻 CLI — thin HTTP client"]
+        direction LR
+        CLI["heimdall search · recap · breakdown<br/>status · run · serve"]
     end
 
     IPC --> TRIG
-    MON --> SHOT
+    MPRIS --> TRIG
     WINMETA --> SHOT
     TRIG --> SHOT
     SHOT --> OCR
-    OCR --> TEXTS
     SHOT --> FRAMES
+    OCR --> FTS
+    TRIG --> EVENTS
+    MPRIS --> TRACKS
 
-    TEXTS --> SEARCH
+    FTS --> SEARCH
     FRAMES --> FRAMES_EP
 
-    SEARCH --> GRAPH
-    FRAMES_EP --> GRAPH
-    GRAPH --> LLM
-    GEMMA --> OPENAI
-    OPENAI --> GRAPH
+    SEARCH --> API
+    FRAMES_EP --> API
 
-    PIPES_EP --> SCHED
-    SCHED --> GRAPH
+    PIPES_EP --> RECAP
+    PIPES_EP --> BREAK
+    SCHED --> RECAP
+    SCHED --> BREAK
+    RECAP --> LLM
+    BREAK --> LLM
+    GEMMA --> OPENAI
+    OPENAI --> RECAP
+    OPENAI --> BREAK
+
+    RECAP -. trace .-> TRACE
+    BREAK -. trace .-> TRACE
 
     CLI --> API
-    WEB -.optional later.-> API
+    API -. serve .-> SCHED
 
     classDef hypr fill:#0f172a,stroke:#94a3b8,color:#e2e8f0
     classDef cap fill:#0c4a6e,stroke:#38bdf8,color:#e0f2fe
     classDef db fill:#4c1d95,stroke:#a78bfa,color:#ede9fe
     classDef api fill:#064e3b,stroke:#34d399,color:#d1fae5
-    classDef lg fill:#0f766e,stroke:#2dd4bf,color:#ccfbf1
+    classDef pipes fill:#0f766e,stroke:#2dd4bf,color:#ccfbf1
     classDef llm fill:#78350f,stroke:#fbbf24,color:#fef3c7
+    classDef obs fill:#701a75,stroke:#e879f9,color:#fdf4ff
     classDef client fill:#1e3a8a,stroke:#60a5fa,color:#dbeafe
     class HYPR hypr
-    class IPC,MON,WINMETA hypr
+    class IPC,WINMETA,MPRIS hypr
     class TRIG,SHOT,OCR cap
-    class FRAMES,TEXTS db
-    class SEARCH,FRAMES_EP,HEALTH,PIPES_EP api
-    class GRAPH,SCHED lg
+    class FRAMES,TRACKS,EVENTS,FTS db
+    class SEARCH,FRAMES_EP,HEALTH,PIPES_EP,SCHED api
+    class RECAP,BREAK pipes
     class GEMMA,OPENAI llm
-    class CLI,WEB client
+    class TRACE obs
+    class CLI client
