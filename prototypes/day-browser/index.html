@@ -214,33 +214,35 @@ function variantA(){
       </div>
     </div>`;
 
+  const q = s => el.querySelector(s);
+
   function paint(){
     const f = sel;
-    $('#vwin').textContent = f.window_title || '(untitled window)';
-    $('#vmeta').textContent = `${fmt(f.ts)} · ${f.window_class}${f.fullscreen ? ' · fullscreen' : ''}`;
-    $('#vocr').textContent = f.ocr_text || 'no OCR text captured';
-    $('#vprev').innerHTML = `<img src="${imgOf(f)}" alt="frame">`;
+    q('#vwin').textContent = f.window_title || '(untitled window)';
+    q('#vmeta').textContent = `${fmt(f.ts)} · ${f.window_class}${f.fullscreen ? ' · fullscreen' : ''}`;
+    q('#vocr').textContent = f.ocr_text || 'no OCR text captured';
+    q('#vprev').innerHTML = `<img src="${imgOf(f)}" alt="frame">`;
     const cap = [`${fmt(f.ts)}`, `${f.window_class}`].join(' · ');
-    $('#vprev').innerHTML += `<div class="cap">${cap}</div>`;
+    q('#vprev').innerHTML += `<div class="cap">${cap}</div>`;
     const mus = playingAt(f.ts);
-    $('#vmus').innerHTML = mus
+    q('#vmus').innerHTML = mus
       ? `<div class="chip b" style="margin-top:8px">♪ ${esc(musicBlock(mus))}</div>`
       : `<div class="chip" style="margin-top:8px">no music</div>`;
-    $('#vrecap').textContent = recapText;
-    $('#vsnd').innerHTML = playingStarts.length
+    q('#vrecap').textContent = recapText;
+    q('#vsnd').innerHTML = playingStarts.length
       ? playingStarts.map(t =>
           `<div class="trk${t.status!=='Playing'?' p':''}"><span class="eq"></span><div><div style="font-size:12px;font-weight:600">${esc(musicBlock(t))}</div><div class="faint" style="font-size:11px">${fmt(t.ts)}</div></div></div>`).join('')
       : '<div class="muted faint">nothing played today</div>';
 
-    $('#vreel').innerHTML = frames.map(f =>
+    q('#vreel').innerHTML = frames.map(f =>
       `<div class="frame${f.id===sel.id?' sel':''}" data-id="${f.id}">
         <img src="${imgOf(f)}" alt="" loading="lazy">
         ${playingAt(f.ts)?'<span class="mus">♪</span>':''}
         <div class="t">${fmt(f.ts)} · ${esc(f.window_class)}</div>
       </div>`).join('');
 
-    $('#vreel').querySelectorAll('.frame').forEach(c=>c.addEventListener('click',()=>{ sel = frames.find(x=>x.id===+c.dataset.id); paint(); }));
-    $('#vdate').textContent = fmtFull(sel.ts);
+    q('#vreel').querySelectorAll('.frame').forEach(c=>c.addEventListener('click',()=>{ sel = frames.find(x=>x.id===+c.dataset.id); paint(); }));
+    q('#vdate').textContent = fmtFull(sel.ts);
   }
   paint();
   return el;
@@ -297,10 +299,11 @@ function variantB(){
     let h=0; for(const ch of cls) h=(h*31+ch.charCodeAt(0))>>>0;
     return pal[h%pal.length];
   }
+  const qs = s => el.querySelector(s);
   function draw(){
     const terms = q.toLowerCase().split(/\s+/).filter(Boolean);
     const list = frames.filter(f => !terms.length || terms.every(t => (f.ocr_text||'').toLowerCase().includes(t) || (f.window_title||'').toLowerCase().includes(t) || (f.window_class||'').toLowerCase().includes(t)));
-    $('#vfeed').innerHTML =
+    qs('#vfeed').innerHTML =
       `<div class="daysep">${dayStr}</div>` +
       list.map(f => {
         const mus = playingAt(f.ts);
@@ -314,13 +317,13 @@ function variantB(){
           </div>
         </div>`;
       }).join('') || '<p class="muted" style="padding:20px">nothing matches — try a different word</p>';
-    $('#vfeed').querySelectorAll('.row').forEach(r=>r.addEventListener('click',()=>{
+    qs('#vfeed').querySelectorAll('.row').forEach(r=>r.addEventListener('click',()=>{
       const f = DATA.items.find(x=>x.id===+r.dataset.id);
       window.open(imgOf(f), '_blank');
     }));
-    $('#vclasses').innerHTML = classesList().map(([k,n])=>`<div style="display:flex;justify-content:space-between;font-size:12px;padding:3px 0;border-bottom:1px dashed var(--line)"><span>${esc(k)}</span><span class="faint">${n} frames</span></div>`).join('');
-    $('#vbreak').innerHTML = breakBars();
-    $('#vsnd').innerHTML = playingStarts.map(t=>`<div style="font-size:12px;padding:4px 0;border-bottom:1px dashed var(--line)"><span class="chip b" style="font-size:10px">♪</span> ${esc(musicBlock(t))}<div class="faint" style="font-size:10px">${fmt(t.ts)}</div></div>`).join('');
+    qs('#vclasses').innerHTML = classesList().map(([k,n])=>`<div style="display:flex;justify-content:space-between;font-size:12px;padding:3px 0;border-bottom:1px dashed var(--line)"><span>${esc(k)}</span><span class="faint">${n} frames</span></div>`).join('');
+    qs('#vbreak').innerHTML = breakBars();
+    qs('#vsnd').innerHTML = playingStarts.map(t=>`<div style="font-size:12px;padding:4px 0;border-bottom:1px dashed var(--line)"><span class="chip b" style="font-size:10px">♪</span> ${esc(musicBlock(t))}<div class="faint" style="font-size:10px">${fmt(t.ts)}</div></div>`).join('');
   }
   el.querySelector('#vq').addEventListener('input', e => { q = e.target.value; draw(); });
   el.querySelector('#volder').addEventListener('click', () => alert('prototype: day-at-a-time pagination — the API is ASC-only today, so “older” needs a day window.'));
@@ -356,7 +359,9 @@ function variantC(){
     </div>
     <div id="vstory"></div>`;
 
-  $('#vstory').innerHTML = chaps.map((ch,i)=>{
+  const q = s => el.querySelector(s);
+
+  q('#vstory').innerHTML = chaps.map((ch,i)=>{
     const f0 = ch.frames[0], f1 = ch.frames[ch.frames.length-1];
     const mus = playingAt(f0.ts);
     const next = chaps[i+1];
