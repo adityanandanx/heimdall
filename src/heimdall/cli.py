@@ -35,8 +35,11 @@ class ApiError(Exception):
 class ApiClient:
     """Minimal JSON HTTP client for the heimdall API."""
 
-    def __init__(self, base_url: str, transport: httpx.AsyncBaseTransport | None = None):
-        self._client = httpx.Client(base_url=base_url, timeout=300, transport=transport)
+    def __init__(self, base_url: str, transport: httpx.AsyncBaseTransport | None = None,
+                 timeout: float = 300.0):
+        self._client = httpx.Client(base_url=base_url,
+                                    timeout=httpx.Timeout(timeout, connect=3.0),
+                                    transport=transport)
 
     def _check(self, r: httpx.Response) -> dict:
         if r.status_code >= 400:
@@ -48,22 +51,32 @@ class ApiClient:
         return r.json()
 
     def get(self, path: str, params: dict | None = None) -> dict:
-        return self._check(self._client.get(path, params=params))
+        try:
+            return self._check(self._client.get(path, params=params))
+        except httpx.TransportError as exc:
+            raise ApiError(0, _unreachable(self._client.base_url, exc))
 
     def post(self, path: str, params: dict | None = None) -> dict:
-        return self._check(self._client.post(path, params=params))
+        try:
+            return self._check(self._client.post(path, params=params))
+        except httpx.TransportError as exc:
+            raise ApiError(0, _unreachable(self._client.base_url, exc))
 
     def close(self) -> None:
         self._client.close()
 
 
-def _client(cfg: Config) -> ApiClient:
+def _unreachable(base_url: str, exc: httpx.TransportError) -> str:
+    return f"cannot reach heimdall API at {base_url} ({type(exc).__name__}) — is `heimdall serve` running?"
+
+
+def _client(cfg: Config, timeout: float = 300.0) -> ApiClient:
     if _client_factory is not None:
         return _client_factory(cfg)
     base = cfg.api.bind
     if base in ("0.0.0.0", "::"):
         base = "127.0.0.1"
-    return ApiClient(f"http://{base}:{cfg.api.port}")
+    return ApiClient(f"http://{base}:{cfg.api.port}", timeout=timeout)
 
 
 @app.callback()
@@ -169,8 +182,12 @@ def _shift(day: str, n: int) -> str:
 
 @app.command("status")
 def status(json_output: bool = typer.Option(False, "--json")) -> None:
-    """Show whether capture/server/llama are up and today's frame count."""
-    data = _client(_cfg).get("/status")
+    """Show whether capture/server/llama are up and today's frame count.
+
+    This is the down-detector: it talks to the API with a short timeout so a
+    missing or wedged server is reported quickly instead of hanging.
+    """
+    data = _client(_cfg, timeout=5.0).get("/status")
     if json_output:
         print(json.dumps(data, ensure_ascii=False, indent=2))
         return

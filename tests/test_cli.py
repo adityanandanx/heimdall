@@ -132,3 +132,17 @@ def test_api_error_exits_nonzero(config_path, capsys):
     with pytest.raises(SystemExit) as exc:
         run_cli(["run", "nope"], config_path, transport, capsys)
     assert exc.value.code == 1
+
+
+def test_status_unreachable_server_fails_fast(config_path, capsys):
+    """status is the down-detector: an unreachable or non-responsive API must
+    produce a clear error and a nonzero exit instead of hanging."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("no response", request=request)
+
+    with pytest.raises(SystemExit) as exc:
+        run_cli(["status"], config_path, httpx.MockTransport(handler), capsys)
+    assert exc.value.code == 1
+    err = capsys.readouterr().err
+    assert "cannot reach heimdall API" in err
+    assert "heimdall serve" in err
