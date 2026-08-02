@@ -7,7 +7,6 @@ flowchart TB
         IPC["socket2 events<br/>activewindow · workspace<br/>openwindow · fullscreen"]
         MON["monitors<br/>grim -o (all outputs)"]
         WINMETA["hyprctl activewindow<br/>class · title · workspace"]
-        AUD["PipeWire<br/>pw-record system + mic"]
     end
 
     subgraph CAP["📡 Capture daemon — Python (event-driven)"]
@@ -15,20 +14,17 @@ flowchart TB
         TRIG["Event Trigger<br/>debounce + throttle"]
         SHOT["grim screenshot → JPEG<br/>~300KB / frame"]
         OCR["tesseract OCR<br/>ENG text layer"]
-        STT["faster-whisper<br/>small/base (local CPU)<br/>speaker labels (basic)"]
-        REDACT["regex redaction<br/>passwords · tokens · emails"]
     end
 
     subgraph DB["💾 SQLite + FTS5 — ~/.heimdall/"]
         direction LR
         FRAMES["frames table<br/>ts · monitor · window · path"]
-        TEXTS["texts table<br/>FTS5 full-text index<br/>ocr + transcript"]
-        AUDIO["audio table<br/>ts · transcript · speaker"]
+        TEXTS["texts table<br/>FTS5 full-text index<br/>ocr content"]
     end
 
     subgraph API["🔌 FastAPI — localhost:3030"]
         direction LR
-        SEARCH["/search?q=&type="]
+        SEARCH["/search?q="]
         FRAMES_EP["/frames?window=&range="]
         HEALTH["/health"]
         PIPES_EP["/pipes/run/{name}"]
@@ -36,54 +32,44 @@ flowchart TB
 
     subgraph LG["🤖 LangGraph — Pipes (scheduled agents)"]
         direction LR
-        GRAPH["StateGraph per pipe<br/>load → refine → summarize → output"]
-        STATE["State<br/>TypedDict + checkpointing"]
-        TOOLS["Tools<br/>db_search · read_frames"]
-        SCHED["APScheduler / cron<br/>day-recap · time-breakdown · meeting"]
+        GRAPH["StateGraph per pipe<br/>load → summarize → output"]
+        SCHED["APScheduler / cron<br/>day-recap · time-breakdown"]
     end
 
     subgraph LLM["🧠 llama-server :8080"]
         direction LR
-        GEMMA["Gemma 4 12B<br/>QAT-Q4_0 / Q4_K_M (7 GB)<br/>Vulkan → Intel Arc"]
-        MCP["OpenAI-compatible API<br/>/v1/chat/completions"]
+        GEMMA["Gemma 4 E2B QAT<br/>QAT-Q4_0 (3.2 GB) · 12B upgrade<br/>Vulkan → Intel Arc"]
+        OPENAI["OpenAI-compatible API<br/>/v1/chat/completions"]
     end
 
     subgraph CLIENT["🧑‍💻 Interfaces"]
         direction LR
-        CLI["CLI<br/>sp search · sp recap · sp status"]
-        WEB["web UI (optional)<br/>timeline + search"]
-        AGENT["MCP client<br/>(optional, later)"]
+        CLI["CLI<br/>heimdall search · recap · breakdown"]
+        WEB["web UI (optional later)<br/>timeline + search"]
     end
 
     IPC --> TRIG
     MON --> SHOT
     WINMETA --> SHOT
-    AUD --> STT
     TRIG --> SHOT
     SHOT --> OCR
-    OCR --> REDACT
-    STT --> REDACT
-    REDACT --> TEXTS
+    OCR --> TEXTS
     SHOT --> FRAMES
-    STT --> AUDIO
 
     TEXTS --> SEARCH
     FRAMES --> FRAMES_EP
-    AUDIO --> SEARCH
 
     SEARCH --> GRAPH
     FRAMES_EP --> GRAPH
-    TOOLS --> DB
     GRAPH --> LLM
-    GEMMA --> MCP
-    MCP --> GRAPH
+    GEMMA --> OPENAI
+    OPENAI --> GRAPH
 
     PIPES_EP --> SCHED
     SCHED --> GRAPH
 
     CLI --> API
-    WEB --> API
-    AGENT -.optional later.-> API
+    WEB -.optional later.-> API
 
     classDef hypr fill:#0f172a,stroke:#94a3b8,color:#e2e8f0
     classDef cap fill:#0c4a6e,stroke:#38bdf8,color:#e0f2fe
@@ -93,10 +79,10 @@ flowchart TB
     classDef llm fill:#78350f,stroke:#fbbf24,color:#fef3c7
     classDef client fill:#1e3a8a,stroke:#60a5fa,color:#dbeafe
     class HYPR hypr
-    class IPC,MON,WINMETA,AUD hypr
-    class TRIG,SHOT,OCR,STT,REDACT cap
-    class FRAMES,TEXTS,AUDIO db
+    class IPC,MON,WINMETA hypr
+    class TRIG,SHOT,OCR cap
+    class FRAMES,TEXTS db
     class SEARCH,FRAMES_EP,HEALTH,PIPES_EP api
-    class GRAPH,STATE,TOOLS,SCHED lg
-    class GEMMA,MCP llm
-    class CLI,WEB,AGENT client
+    class GRAPH,SCHED lg
+    class GEMMA,OPENAI llm
+    class CLI,WEB client
