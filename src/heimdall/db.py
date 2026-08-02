@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import sqlite3
 import threading
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -17,23 +18,23 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS frames (
     id INTEGER PRIMARY KEY,
     ts INTEGER NOT NULL,              -- UTC epoch ms
-    monitor TEXT,                     -- e.g. "eDP-1"
-    workspace TEXT,                   -- "<id>:<name>"
-    window_class TEXT NOT NULL,
+    monitor INTEGER,                  -- hyprctl monitor id
+    workspace INTEGER,                -- hyprctl workspace id
+    window_class TEXT,
     window_title TEXT,
-    fullscreen INTEGER NOT NULL DEFAULT 0,
-    trigger TEXT NOT NULL,            -- activewindow|openwindow|workspace|fullscreen|windowtitle|keepalive|mpris
+    fullscreen INTEGER,
+    trigger TEXT,                     -- activewindow|openwindow|workspace|fullscreen|windowtitle|keepalive|mpris
     image_path TEXT NOT NULL,         -- relative to the data dir
     image_bytes INTEGER NOT NULL,
-    ocr_text TEXT NOT NULL DEFAULT '',
+    ocr_text TEXT,
     ocr_sec REAL
 );
 
 CREATE TABLE IF NOT EXISTS tracks (
     ts INTEGER PRIMARY KEY,           -- UTC epoch ms
-    player TEXT NOT NULL,
+    player TEXT,
     artist TEXT,
-    title TEXT NOT NULL,
+    title TEXT,
     album TEXT,
     status TEXT                       -- playing|paused
 );
@@ -88,16 +89,12 @@ def connect(path: str | os.PathLike) -> sqlite3.Connection:
     return conn
 
 
-def initialize(path: str | os.PathLike) -> sqlite3.Connection:
-    """Create the DB at path (if missing) and apply the schema.
-
-    Returns a closed connection handle (schema setup only; open() for use).
-    """
+def init_db(path: str | os.PathLike) -> None:
+    """Create the DB at path (if missing) and apply the schema."""
     conn = connect(path)
     conn.executescript(SCHEMA)
     conn.commit()
     conn.close()
-    return conn
 
 
 class Database:
@@ -111,9 +108,19 @@ class Database:
     def __init__(self, path: str | os.PathLike):
         self.path = str(path)
         self._lock = threading.RLock()
+        self.query_count = 0
 
     def open(self) -> sqlite3.Connection:
         return connect(self.path)
+
+    @contextmanager
+    def conn(self):
+        """A fresh connection that is always closed, even on error."""
+        connection = self.open()
+        try:
+            yield connection
+        finally:
+            connection.close()
 
     def size_bytes(self) -> int:
         try:
@@ -124,54 +131,45 @@ class Database:
     # ---- frames ----
 
     def insert_frame(self, values: dict[str, Any]) -> int:
-        with self._lock:
-            conn = self.open()
-            try:
-                cur = conn.execute(
-                    "INSERT INTO frames (ts, monitor, workspace, window_class, window_title,"
-                    " fullscreen, trigger, image_path, image_bytes, ocr_text, ocr_sec)"
-                    " VALUES (:ts, :monitor, :workspace, :window_class, :window_title,"
-                    " :fullscreen, :trigger, :image_path, :image_bytes, :ocr_text, :ocr_sec)",
-                    values,
-                )
-                conn.commit()
-                return cur.lastrowid
-            finally:
-                conn.close()
+        with self._lock, self.conn() as conn:
+            cur = conn.execute(
+                "INSERT INTO frames (ts, monitor, workspace, window_class, window_title,"
+                " fullscreen, trigger, image_path, image_bytes, ocr_text, ocr_sec)"
+                " VALUES (:ts, :monitor, :workspace, :window_class, :window_title,"
+                " :fullscreen, :trigger, :image_path, :image_bytes, :ocr_text, :ocr_sec)",
+                values,
+            )
+            conn.commit()
+            return cur.lastrowid
 
     def list_frames(self, *, window_class: str | None = None, trigger: str | None = None,
                     start: int | None = None, end: int | None = None,
                     limit: int = 20, offset: int = 0) -> tuple[int, list[dict]]:
+        self.query_count += 1
         where, params = self._frame_filters(window_class=window_class, trigger=trigger,
                                             start=start, end=end)
-        with self._lock:
-            conn = self.open()
-            try:
-                total = conn.execute(f"SELECT COUNT(*) FROM frames{where}", params).fetchone()[0]
-                rows = conn.execute(
-                    f"SELECT {', '.join(FRAME_COLS)} FROM frames{where}"
-                    " ORDER BY ts LIMIT ? OFFSET ?",
-                    (*params, limit, offset),
-                ).fetchall()
-                items = [dict(r) for r in rows]
-                return total, items
-            finally:
-                conn.close()
+        with self._lock, self.conn() as conn:
+            total = conn.execute(f"SELECT COUNT(*) FROM frames{where}", params).fetchone()[0]
+            rows = conn.execute(
+                f"SELECT {', '.join(FRAME_COLS)} FROM frames{where}"
+                " ORDER BY ts LIMIT ? OFFSET ?",
+                (*params, limit, offset),
+            ).fetchall()
+            items = [dict(r) for r in rows]
+            return total, items
 
     def get_frame(self, frame_id: int) -> dict | None:
-        with self._lock:
-            conn = self.open()
-            try:
-                row = conn.execute(
-                    f"SELECT {', '.join(FRAME_COLS)} FROM frames WHERE id = ?", (frame_id,)
-                ).fetchone()
-                return dict(row) if row else None
-            finally:
-                conn.close()
+        self.query_count += 1
+        with self._lock, self.conn() as conn:
+            row = conn.execute(
+                f"SELECT {', '.join(FRAME_COLS)} FROM frames WHERE id = ?", (frame_id,)
+            ).fetchone()
+            return dict(row) if row else None
 
     def frames_in_range(self, start: int | None = None, end: int | None = None,
                         limit: int | None = None) -> list[dict]:
         """All frames in [start, end) ordered by ts — used by the pipes."""
+        self.query_count += 1
         clauses, params = [], []
         if start is not None:
             clauses.append("ts >= ?")
@@ -184,21 +182,14 @@ class Database:
         if limit is not None:
             sql += " LIMIT ?"
             params.append(limit)
-        with self._lock:
-            conn = self.open()
-            try:
-                return [dict(r) for r in conn.execute(sql, params).fetchall()]
-            finally:
-                conn.close()
+        with self._lock, self.conn() as conn:
+            return [dict(r) for r in conn.execute(sql, params).fetchall()]
 
     def count_frames(self, start: int | None = None, end: int | None = None) -> int:
+        self.query_count += 1
         where, params = self._frame_filters(start=start, end=end)
-        with self._lock:
-            conn = self.open()
-            try:
-                return conn.execute(f"SELECT COUNT(*) FROM frames{where}", params).fetchone()[0]
-            finally:
-                conn.close()
+        with self._lock, self.conn() as conn:
+            return conn.execute(f"SELECT COUNT(*) FROM frames{where}", params).fetchone()[0]
 
     def _frame_filters(self, *, window_class=None, trigger=None, start=None, end=None) -> tuple[str, tuple]:
         clauses, params = [], []
@@ -228,6 +219,7 @@ class Database:
         snippet is taken from the OCR column with `**` highlight markers.
         Raises sqlite3.OperationalError on an invalid FTS5 MATCH.
         """
+        self.query_count += 1
         where, params = [], []
         where.append("frames_fts MATCH ?")
         params.append(query)
@@ -248,37 +240,30 @@ class Database:
             f" WHERE {' AND '.join(where)} ORDER BY score"
             " LIMIT ? OFFSET ?"
         )
-        with self._lock:
-            conn = self.open()
-            try:
-                total = conn.execute(
-                    f"SELECT COUNT(*) FROM frames_fts JOIN frames f ON f.id = frames_fts.rowid"
-                    f" WHERE {' AND '.join(where)}",
-                    params,
-                ).fetchone()[0]
-                rows = conn.execute(sql, (*params, limit, offset)).fetchall()
-                items = [dict(r) for r in rows]
-                return total, items
-            finally:
-                conn.close()
+        with self._lock, self.conn() as conn:
+            total = conn.execute(
+                f"SELECT COUNT(*) FROM frames_fts JOIN frames f ON f.id = frames_fts.rowid"
+                f" WHERE {' AND '.join(where)}",
+                params,
+            ).fetchone()[0]
+            rows = conn.execute(sql, (*params, limit, offset)).fetchall()
+            items = [dict(r) for r in rows]
+            return total, items
 
     # ---- tracks / events ----
 
     def insert_track(self, *, ts: int, player: str, artist: str | None,
                      title: str, album: str | None, status: str | None) -> None:
-        with self._lock:
-            conn = self.open()
-            try:
-                conn.execute(
-                    "INSERT OR IGNORE INTO tracks (ts, player, artist, title, album, status)"
-                    " VALUES (?, ?, ?, ?, ?, ?)",
-                    (ts, player, artist, title, album, status),
-                )
-                conn.commit()
-            finally:
-                conn.close()
+        with self._lock, self.conn() as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO tracks (ts, player, artist, title, album, status)"
+                " VALUES (?, ?, ?, ?, ?, ?)",
+                (ts, player, artist, title, album, status),
+            )
+            conn.commit()
 
     def list_tracks(self, start: int | None = None, end: int | None = None) -> list[dict]:
+        self.query_count += 1
         where, params = "", []
         if start is not None:
             where += " WHERE ts >= ?"
@@ -286,23 +271,15 @@ class Database:
         if end is not None:
             where += (" AND" if where else " WHERE") + " ts <= ?"
             params.append(end)
-        with self._lock:
-            conn = self.open()
-            try:
-                rows = conn.execute(
-                    f"SELECT ts, player, artist, title, album, status FROM tracks{where}"
-                    " ORDER BY ts",
-                    params,
-                ).fetchall()
-                return [dict(r) for r in rows]
-            finally:
-                conn.close()
+        with self._lock, self.conn() as conn:
+            rows = conn.execute(
+                f"SELECT ts, player, artist, title, album, status FROM tracks{where}"
+                " ORDER BY ts",
+                params,
+            ).fetchall()
+            return [dict(r) for r in rows]
 
     def insert_event(self, *, ts: int, raw: str) -> None:
-        with self._lock:
-            conn = self.open()
-            try:
-                conn.execute("INSERT OR IGNORE INTO events (ts, raw) VALUES (?, ?)", (ts, raw))
-                conn.commit()
-            finally:
-                conn.close()
+        with self._lock, self.conn() as conn:
+            conn.execute("INSERT OR IGNORE INTO events (ts, raw) VALUES (?, ?)", (ts, raw))
+            conn.commit()

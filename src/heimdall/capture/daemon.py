@@ -19,11 +19,11 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Iterable, Optional
 
-from heimdall.capture.events import activewindow_signature, classify_trigger, is_duplicate, parse_socket2_line, should_capture
+from heimdall.capture.events import activewindow_signature, classify_trigger, is_duplicate, is_track_change, parse_socket2_line, should_capture, workspace_id
 from heimdall.config import Config, load_config
-from heimdall.db import Database, initialize
+from heimdall.db import Database, init_db
 
 log = logging.getLogger("heimdall.capture")
 
@@ -39,7 +39,7 @@ class CaptureTools:
     grim: Callable[[int, int, int, int], Optional[bytes]] = field(default=None)
     activewindow: Callable[[], Optional[dict]] = field(default=None)
     ocr: Callable[[bytes], tuple[float, str]] = field(default=None)
-    playerctl_lines: Callable[[], list[str]] = field(default=None)
+    playerctl_follow: Callable[[], Iterable[str]] = field(default=None)
 
     def __post_init__(self):
         if self.grim is None:
@@ -48,6 +48,8 @@ class CaptureTools:
             self.activewindow = self._activewindow
         if self.ocr is None:
             self.ocr = self._ocr
+        if self.playerctl_follow is None:
+            self.playerctl_follow = self._playerctl_follow
 
     def find_socket(self) -> str:
         for inst in os.listdir(self.socket_dir):
@@ -84,6 +86,51 @@ class CaptureTools:
         out, _ = p.communicate(img)
         return time.monotonic() - t0, out.decode(errors="replace")
 
+    @staticmethod
+    def _playerctl_follow() -> Iterable[str]:
+        cmd = ["playerctl", "metadata", "--follow", "--format",
+               "{{status}}|{{artist}}|{{title}}|{{album}}|{{playerName}}"]
+        p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+        try:
+            for raw in p.stdout or []:
+                yield raw.strip()
+        finally:
+            p.wait()
+
+    def socket_lines(self, should_stop: Callable[[], bool]) -> Iterable[str]:
+        """Blocking generator of complete socket2 event lines.
+
+        Reconnects on EOF/error with a short sleep; checks `should_stop` between
+        recvs so the listener thread can be torn down promptly. All socket IO
+        lives here, behind the seam.
+        """
+        buf = b""
+        while not should_stop():
+            sock = None
+            try:
+                sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                sock.connect(self.find_socket())
+                sock.settimeout(1)
+                while not should_stop():
+                    try:
+                        data = sock.recv(65536)
+                    except socket.timeout:
+                        continue
+                    if not data:
+                        break  # server closed the socket -> reconnect
+                    buf += data
+                    while b"\n" in buf:
+                        line, buf = buf.split(b"\n", 1)
+                        yield line.decode()
+            except OSError:
+                time.sleep(1)
+            finally:
+                if sock is not None:
+                    try:
+                        sock.close()
+                    except OSError:
+                        pass
+
 
 class CaptureDaemon:
     """Owns the queues, threads and DB writes. `run()` blocks until stopped."""
@@ -100,6 +147,8 @@ class CaptureDaemon:
         self._lock = threading.Lock()
         self._last_fire = 0.0
         self._last_sig: tuple | None = None
+        self._last_track: tuple | None = None
+        self._last_track_status: str | None = None
         self.events_q: queue.Queue[str] = queue.Queue()
         self.jobs: queue.Queue[Job] = queue.Queue()
         self.ocr_jobs: queue.Queue[tuple[int, bytes]] = queue.Queue()
@@ -108,34 +157,8 @@ class CaptureDaemon:
     # ---- threads ----
 
     def _listener(self) -> None:
-        buf = b""
-        sock = self._open_socket()
-        while not self._stop.is_set():
-            try:
-                sock.settimeout(1)
-                data = sock.recv(65536)
-                if data:
-                    buf += data
-                    while b"\n" in buf:
-                        line, buf = buf.split(b"\n", 1)
-                        self._on_event(line.decode())
-                else:
-                    sock.close()
-                    sock = self._open_socket()
-            except socket.timeout:
-                pass
-            except OSError:
-                time.sleep(1)
-                try:
-                    sock.close()
-                    sock = self._open_socket()
-                except Exception:
-                    pass
-
-    def _open_socket(self):
-        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        s.connect(self.tools.find_socket())
-        return s
+        for line in self.tools.socket_lines(self._stop.is_set):
+            self._on_event(line)
 
     def _on_event(self, line: str) -> None:
         parsed = parse_socket2_line(line)
@@ -179,17 +202,11 @@ class CaptureDaemon:
             self.jobs.put(("keepalive", int(time.time() * 1000)))
 
     def _mpris(self) -> None:
-        cmd = ["playerctl", "metadata", "--follow", "--format",
-               "{{status}}|{{artist}}|{{title}}|{{album}}|{{playerName}}"]
         while not self._stop.is_set():
             try:
-                p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
-                for raw in p.stdout or []:
-                    line = raw.strip()
-                    if not line:
-                        continue
-                    self._on_track(line)
-                p.wait()
+                for line in self.tools.playerctl_follow():
+                    if line and not self._stop.is_set():
+                        self._on_track(line)
             except FileNotFoundError:
                 log.warning("playerctl not found; MPRIS capture disabled")
                 return
@@ -207,7 +224,15 @@ class CaptureDaemon:
         now_ms = int(time.time() * 1000)
         self.db.insert_track(ts=now_ms, player=player, artist=artist or None,
                              title=title, album=album or None, status=status or None)
-        if status == "playing":
+        # capture on playback start/resume and on mid-play track switches (#5);
+        # paused states never capture — a paused first sighting or a track
+        # switch while paused is not listening time
+        changed = is_track_change(self._last_track, player, artist, title)
+        resumed = status == "playing" and self._last_track_status != "playing"
+        if changed:
+            self._last_track = (player, artist or "", title or "")
+        self._last_track_status = status
+        if status == "playing" and (changed or resumed):
             self.jobs.put(("mpris", now_ms))
 
     def _capture_worker(self) -> None:
@@ -229,10 +254,10 @@ class CaptureDaemon:
                 if is_duplicate(sig, self._last_sig):
                     continue
                 self._last_sig = sig
-            at, size = meta.get("at") or {}, meta.get("size") or {}
-            if not at or not size:
+            at, size = meta.get("at") or [], meta.get("size") or []
+            if len(at) < 2 or len(size) < 2:
                 continue
-            img = self.tools.grim(int(at["x"]), int(at["y"]), int(size["w"]), int(size["h"]))
+            img = self.tools.grim(int(at[0]), int(at[1]), int(size[0]), int(size[1]))
             if not img:
                 log.warning("grim capture failed")
                 continue
@@ -241,7 +266,6 @@ class CaptureDaemon:
                 self.ocr_jobs.put((frame_id, img))
 
     def _store_frame(self, ts: int, meta: dict, trigger: str, img: bytes) -> Optional[int]:
-        ws = meta.get("workspace") or {}
         dt = time.localtime(ts / 1000)
         rel_dir = f"frames/{dt.tm_year:04d}/{dt.tm_mon:02d}/{dt.tm_mday:02d}"
         day_dir = self.data / rel_dir
@@ -251,14 +275,14 @@ class CaptureDaemon:
         return self.db.insert_frame({
             "ts": ts,
             "monitor": meta.get("monitor"),
-            "workspace": f"{ws.get('id')}:{ws.get('name')}",
+            "workspace": workspace_id(meta),
             "window_class": meta.get("class") or "",
             "window_title": meta.get("title"),
             "fullscreen": int(meta.get("fullscreen") or 0),
             "trigger": trigger,
             "image_path": image_path,
             "image_bytes": len(img),
-            "ocr_text": "",
+            "ocr_text": None,
             "ocr_sec": None,
         })
 
@@ -269,13 +293,10 @@ class CaptureDaemon:
                 break
             frame_id, img = item
             secs, text = self.tools.ocr(img)
-            conn = self.db.open()
-            try:
+            with self.db.conn() as conn:
                 conn.execute("UPDATE frames SET ocr_text = ?, ocr_sec = ? WHERE id = ?",
                              (text, secs, frame_id))
                 conn.commit()
-            finally:
-                conn.close()
 
     def _heartbeat_loop(self) -> None:
         while not self._stop.wait(15):
@@ -291,7 +312,7 @@ class CaptureDaemon:
     # ---- lifecycle ----
 
     def start(self) -> None:
-        initialize(self.db_path)
+        init_db(self.db_path)
         self._write_heartbeat()
         threads = [
             threading.Thread(target=self._listener, name="socket2", daemon=True),

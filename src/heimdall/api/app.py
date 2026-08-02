@@ -14,7 +14,7 @@ from fastapi import FastAPI
 
 from heimdall import __version__
 from heimdall.config import Config
-from heimdall.db import Database, initialize
+from heimdall.db import Database, init_db
 from heimdall.pipes.llm import LlmClient
 from heimdall.scheduler import start_scheduler as start_scheduler_fn
 from heimdall.api.routers import health_router, search_router, frames_router, pipes_router, status_router
@@ -26,7 +26,7 @@ def create_app(config: Config, *, db_path: str | Path | None = None,
     data = config.data_path
     db_path = Path(db_path) if db_path else data / "data.db"
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    initialize(db_path)
+    init_db(db_path)
 
     llm = LlmClient(config.llama_server.base_url, config.llama_server.model, transport=llm_transport)
 

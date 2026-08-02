@@ -66,6 +66,48 @@ BREAKDOWN_SCHEMA = {
 }
 
 OCR_SNIPPET_CHARS = 200
+HARD_CONTEXT_TOKENS = 7800
+
+
+class PromptOverBudget(ValueError):
+    """Raised when even the title-only recap prompt exceeds the hard context
+    budget; the pipe switches to the FTS5 db_search tool loop instead."""
+
+
+DB_SEARCH_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "db_search",
+        "description": (
+            "Search the day's OCR'd screen frames by keyword. Returns up to "
+            "`limit` ranked hits with timestamps and snippets."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string",
+                          "description": "FTS5 keyword/phrase, e.g. 'leetcode' or 'youtube'"},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 25},
+                "window_class": {"type": "string",
+                                 "description": "Restrict to a window class, e.g. 'firefox'"},
+            },
+            "required": ["query"],
+        },
+    },
+}
+
+RETRIEVAL_SYSTEM_PROMPT = (
+    "You are Heimdall, a local screen-memory recap agent for a single user on Hyprland. "
+    "The user's real activities include: building projects, researching, applying to "
+    "jobs/internships, watching YouTube, movies, listening to music, practicing DSA. "
+    "Music/movies/YouTube have few or no window events, so infer those from window titles. "
+    "You have access to the db_search tool: it searches the day's OCR'd window frames and "
+    "returns ranked snippets with timestamps. Call it as many times as you need to gather "
+    "evidence about what the user did today. When you have gathered enough, stop calling "
+    "tools and answer with a single JSON object exactly of the shape "
+    '{"date": "YYYY-MM-DD", "summary": string, "accomplishments": [string], '
+    '"unfinished": [string], "standout": [string]} and no other text.'
+)
 
 
 def est_tokens(text: str) -> int:
@@ -91,8 +133,8 @@ def build_recap_prompt(frames: list[dict], day: str, budget_tokens: int = 6000) 
             snippet_budget -= est_tokens(ocr[:OCR_SNIPPET_CHARS])
         lines.append(line)
     text = "Here are today's frames:\n\n" + "\n".join(lines)
-    if est_tokens(text) > 7800:
-        raise ValueError(
+    if est_tokens(text) > HARD_CONTEXT_TOKENS:
+        raise PromptOverBudget(
             f"day {day} has {len(frames)} frames: even the title-only prompt exceeds the "
             "model context. Use the documented agent/retrieval path (tool loop over FTS5), "
             "never truncation."

@@ -20,7 +20,7 @@ from heimdall.pipes.prompts import (
     SYSTEM_PROMPT,
     build_breakdown_prompt,
 )
-from heimdall.pipes.render import render_breakdown
+from heimdall.pipes.render import render_breakdown, write_markdown
 from heimdall.timeutil import day_bounds, day_range_iso, now_iso
 
 
@@ -74,13 +74,17 @@ def run(*, day: str, db_path: str | Path, llm: LlmClient, gate: TraceGate,
             [{"role": "system", "content": SYSTEM_PROMPT},
              {"role": "user", "content": prompt}],
             BREAKDOWN_SCHEMA,
+            gate=gate,
         )
-        llm_categories = parse_breakdown(raw)["categories"]
+        with gate.span("parse-breakdown"):
+            llm_categories = parse_breakdown(raw)["categories"]
 
     unclassified_ms = sum(max(0, s.end_ms - s.start_ms) for s in unclassified)
     minutes = assemble_minutes(settled, music_ms, llm_categories, unclassified_ms)
 
     evidence = build_evidence(settled, music_ms, tracks, llm_categories)
+
+    gate.metadata(db_queries=db.query_count)
 
     trace_url = gate.trace_url()
     markdown = render_breakdown(
@@ -92,13 +96,10 @@ def run(*, day: str, db_path: str | Path, llm: LlmClient, gate: TraceGate,
         trace_url=trace_url,
     )
 
-    out_dir = Path(output_dir) if output_dir else Path(db_path).parent / "output"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    path = out_dir / f"time-breakdown-{day}.md"
-    path.write_text(markdown, encoding="utf-8")
+    output_path = write_markdown(markdown, f"time-breakdown-{day}.md", db_path, output_dir)
     return {
         "markdown": markdown,
-        "output_path": str(path.relative_to(Path(db_path).parent)),
+        "output_path": output_path,
         "trace_url": trace_url,
         "frame_count": len(frames),
     }
@@ -111,7 +112,9 @@ def build_evidence(settled: dict[str, int], music_ms: int, tracks: list[dict],
         evidence["Music"] = f"exact playback spans from {len(tracks)} track events"
     elif "Music" in settled:
         evidence["Music"] = "window-class rule (music player frames)"
-    for cat in ("Movies", "Building projects", "Researching", "Job applications", "YouTube", "DSA"):
+    for cat in BREAKDOWN_CATEGORIES:
+        if cat in ("Music", "Other"):
+            continue
         if cat in settled:
             evidence[cat] = "window-class rule (frame/title spans)"
     for item in llm_categories:

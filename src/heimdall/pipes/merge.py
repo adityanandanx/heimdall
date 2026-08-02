@@ -73,8 +73,8 @@ def merge(output_dir: Path, days: int) -> dict:
     markdown = render_merge(
         totals, per_day, best_day,
         end_day=end_day,
-        days=len(per_day),
+        days=days,  # the requested N, not len(per_day): filename is {endday}-{N}d.md
         range_=f"{start_day} - {end_day}",
         generated_at=now_iso(),
     )
-    return {"markdown": markdown, "end_day": end_day, "days": len(per_day)}
+    return {"markdown": markdown, "end_day": end_day, "days": days}

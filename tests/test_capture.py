@@ -8,8 +8,10 @@ from heimdall.capture.events import (
     classify_trigger,
     debounce_burst,
     is_duplicate,
+    is_track_change,
     parse_socket2_line,
     should_capture,
+    workspace_id,
 )
 from heimdall.capture.spans import compute_spans, rules_minutes, spans_to_table, track_playing_ms
 
@@ -66,6 +68,54 @@ def test_duplicate_and_signature():
     assert is_duplicate(sig, sig) is True
     assert is_duplicate(sig, ("firefox", "yt2", "1:1")) is False
     assert is_duplicate(None, sig) is False
+    assert workspace_id(meta) == 1
+    assert workspace_id({"workspace": None}) is None
+    assert workspace_id({}) is None
+
+
+def test_is_track_change():
+    # first sighting always counts as a change
+    assert is_track_change(None, "sidra", "Tycho", "Awake") is True
+    last = ("sidra", "Tycho", "Awake")
+    assert is_track_change(last, "sidra", "Tycho", "Awake") is False
+    # new song while still playing must be a capture trigger
+    assert is_track_change(last, "sidra", "Tycho", "Epoch") is True
+    assert is_track_change(last, "spotify", "Tycho", "Awake") is True
+    # artist/title missing both ways still compares on what is present
+    assert is_track_change(("sidra", "Tycho", ""), "sidra", "Tycho", "") is False
+
+
+def test_mpris_on_track_enqueues_only_on_play_or_change(tmp_path):
+    """Daemon wiring: playerctl --follow only emits on metadata/status changes,
+    so play, resume and track-switch fire; a same-track pause does not (#5)."""
+    from heimdall.capture.daemon import CaptureDaemon
+    from heimdall.config import Config
+    from heimdall.db import init_db
+
+    daemon = CaptureDaemon(Config(data_dir=tmp_path))
+    init_db(path=daemon.db_path)
+    daemon._on_track("playing|Tycho|Awake|Epoch|sidra")  # play -> fire
+    daemon._on_track("paused|Tycho|Awake|Epoch|sidra")   # same track, pause -> no
+    assert daemon.jobs.qsize() == 1
+    daemon._on_track("playing|Tycho|Awake|Epoch|sidra")  # resume same track -> fire
+    daemon._on_track("playing|Tycho|Epoch|Epoch|sidra")  # next song, still playing -> fire
+    assert daemon.jobs.qsize() == 3
+
+
+def test_mpris_paused_states_never_capture(tmp_path):
+    """Paused players do not fire: daemon startup while paused and a track
+    switch while paused are not listening time (#5)."""
+    from heimdall.capture.daemon import CaptureDaemon
+    from heimdall.config import Config
+    from heimdall.db import init_db
+
+    daemon = CaptureDaemon(Config(data_dir=tmp_path))
+    init_db(path=daemon.db_path)
+    daemon._on_track("paused|Tycho|Awake|Epoch|sidra")   # startup while paused -> no
+    daemon._on_track("paused|Tycho|Epoch|Epoch|sidra")   # skip while paused -> no
+    assert daemon.jobs.qsize() == 0
+    daemon._on_track("playing|Tycho|Epoch|Epoch|sidra")  # resume -> fire
+    assert daemon.jobs.qsize() == 1
 
 
 # ---- span computation ----

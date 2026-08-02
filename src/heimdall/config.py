@@ -45,7 +45,7 @@ class SchedulerConfig:
 
 @dataclass
 class ObservabilityConfig:
-    enabled: bool = False
+    enabled: bool = True
 
 
 @dataclass
@@ -86,7 +86,7 @@ def _warn_unknown(section: str, known: set[str], given: dict) -> None:
             warnings.warn(f"config.yaml: unknown key {section}.{key} ignored")
 
 
-def _scalar(sec, name, given, default):
+def _scalar(name, given, default):
     if name in given:
         return given[name]
     return default
@@ -112,31 +112,31 @@ def load_config(path: str | None = None) -> Config:
         api = raw["api"] or {}
         _warn_unknown("api", {"bind", "port"}, api)
         cfg.api = ApiConfig(
-            bind=_scalar("api", "bind", api, cfg.api.bind),
-            port=_scalar("api", "port", api, cfg.api.port),
+            bind=_scalar("bind", api, cfg.api.bind),
+            port=_scalar("port", api, cfg.api.port),
         )
     if "llama_server" in raw:
         ls = raw["llama_server"] or {}
         _warn_unknown("llama_server", {"base_url", "model"}, ls)
         cfg.llama_server = LlamaConfig(
-            base_url=_scalar("llama_server", "base_url", ls, cfg.llama_server.base_url),
-            model=_scalar("llama_server", "model", ls, cfg.llama_server.model),
+            base_url=_scalar("base_url", ls, cfg.llama_server.base_url),
+            model=_scalar("model", ls, cfg.llama_server.model),
         )
     if "capture" in raw:
         cap = raw["capture"] or {}
         _warn_unknown("capture", {"debounce_s", "min_interval_s", "keepalive_min", "ocr_workers"}, cap)
         cfg.capture = CaptureConfig(
-            debounce_s=float(_scalar("capture", "debounce_s", cap, cfg.capture.debounce_s)),
-            min_interval_s=float(_scalar("capture", "min_interval_s", cap, cfg.capture.min_interval_s)),
-            keepalive_min=float(_scalar("capture", "keepalive_min", cap, cfg.capture.keepalive_min)),
-            ocr_workers=int(_scalar("capture", "ocr_workers", cap, cfg.capture.ocr_workers)),
+            debounce_s=float(_scalar("debounce_s", cap, cfg.capture.debounce_s)),
+            min_interval_s=float(_scalar("min_interval_s", cap, cfg.capture.min_interval_s)),
+            keepalive_min=float(_scalar("keepalive_min", cap, cfg.capture.keepalive_min)),
+            ocr_workers=int(_scalar("ocr_workers", cap, cfg.capture.ocr_workers)),
         )
     if "scheduler" in raw:
         sch = raw["scheduler"] or {}
         _warn_unknown("scheduler", {"day_recap", "time_breakdown"}, sch)
         cfg.scheduler = SchedulerConfig(
-            day_recap=_scalar("scheduler", "day_recap", sch, cfg.scheduler.day_recap),
-            time_breakdown=_scalar("scheduler", "time_breakdown", sch, cfg.scheduler.time_breakdown),
+            day_recap=_scalar("day_recap", sch, cfg.scheduler.day_recap),
+            time_breakdown=_scalar("time_breakdown", sch, cfg.scheduler.time_breakdown),
         )
     if "rules" in raw:
         r = raw["rules"] or {}
@@ -148,6 +148,6 @@ def load_config(path: str | None = None) -> Config:
         ob = raw["observability"] or {}
         _warn_unknown("observability", {"enabled"}, ob)
         cfg.observability = ObservabilityConfig(
-            enabled=bool(_scalar("observability", "enabled", ob, cfg.observability.enabled))
+            enabled=bool(_scalar("enabled", ob, cfg.observability.enabled))
         )
     return cfg

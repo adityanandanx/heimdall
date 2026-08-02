@@ -43,10 +43,13 @@ llama_server: {base_url: http://127.0.0.1:8080, model: gemma-4-E2B-it-qat-q4_0}
 capture: {debounce_s: 1.5, min_interval_s: 10, keepalive_min: 5, ocr_workers: 1}
 scheduler: {day_recap: "0 23 * * *", time_breakdown: "5 23 * * *"}
 rules: {window_class_category: {sidra: Music, mpv: Movies}}
-observability: {enabled: false}
+observability: {enabled: true}
 ```
 
 Missing file/keys → code defaults. Langfuse keys are env-only (`LANGFUSE_*`).
+Observability defaults to **enabled**, but stays a no-op until the `langfuse`
+package is installed and `LANGFUSE_HOST`/`LANGFUSE_PUBLIC_KEY`/`LANGFUSE_SECRET_KEY`
+are set — capture/OCR are never traced, only pipe runs.
 
 ## Run (plain scripts — no systemd)
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 
-from heimdall.db import Database, initialize
+from heimdall.db import Database, init_db
 from heimdall.timeutil import day_bounds
 
 from conftest import FIXTURE_DAY, build_day_db
@@ -18,13 +18,36 @@ def _tables(db_path) -> set[str]:
 
 
 def test_schema_creates_all_tables(db_path_tmp):
-    initialize(db_path_tmp)
+    init_db(db_path_tmp)
     tables = _tables(db_path_tmp)
     assert {"frames", "tracks", "events", "frames_fts"} <= tables
 
 
+def _column_types(db_path, table) -> dict[str, str]:
+    conn = sqlite3.connect(db_path)
+    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    conn.close()
+    return {r[1]: r[2] for r in rows}
+
+
+def test_frames_schema_matches_locked_ddl(db_path_tmp):
+    """The schema is the locked v1 DDL (spec #6): monitor/workspace are
+    INTEGER, window_class is nullable TEXT, tracks has no NOT NULL columns."""
+    init_db(db_path_tmp)
+    frames = _column_types(db_path_tmp, "frames")
+    assert frames["monitor"] == "INTEGER"
+    assert frames["workspace"] == "INTEGER"
+    assert frames["window_class"] == "TEXT"
+    assert frames["fullscreen"] == "INTEGER"
+    assert frames["trigger"] == "TEXT"
+    assert frames["ocr_text"] == "TEXT"
+    tracks = _column_types(db_path_tmp, "tracks")
+    assert tracks["player"] == "TEXT"
+    assert tracks["title"] == "TEXT"
+
+
 def test_frames_fts_is_external_content(db_path_tmp):
-    initialize(db_path_tmp)
+    init_db(db_path_tmp)
     conn = sqlite3.connect(db_path_tmp)
     sql = conn.execute("SELECT sql FROM sqlite_master WHERE name='frames_fts'").fetchone()[0]
     assert "content='frames'" in sql
@@ -53,11 +76,11 @@ def test_fts_syncs_on_delete(db):
 
 def test_search_boosts_title_over_ocr(db):
     start, _ = day_bounds(FIXTURE_DAY)
-    db.insert_frame(dict(ts=start + 200 * 60_000, monitor="eDP-1", workspace="2:2",
+    db.insert_frame(dict(ts=start + 200 * 60_000, monitor=0, workspace=2,
                          window_class="kitty", window_title="checkpointers only in title",
                          fullscreen=0, trigger="keepalive", image_path="x.jpg",
                          image_bytes=1, ocr_text="", ocr_sec=1.0))
-    db.insert_frame(dict(ts=start + 210 * 60_000, monitor="eDP-1", workspace="2:2",
+    db.insert_frame(dict(ts=start + 210 * 60_000, monitor=0, workspace=2,
                          window_class="kitty", window_title="",
                          fullscreen=0, trigger="keepalive", image_path="y.jpg",
                          image_bytes=1, ocr_text="checkpointers only in ocr", ocr_sec=1.0))
@@ -86,7 +109,7 @@ def test_invalid_fts_query_raises(db):
 
 
 def test_frames_indexes_exist(db_path_tmp):
-    initialize(db_path_tmp)
+    init_db(db_path_tmp)
     conn = sqlite3.connect(db_path_tmp)
     names = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='index'")}
     assert {"idx_frames_ts", "idx_frames_class_ts", "idx_frames_trigger", "idx_tracks_ts"} <= names

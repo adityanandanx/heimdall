@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from fastapi.testclient import TestClient
 
 from heimdall.api.app import create_app
@@ -35,6 +37,17 @@ def test_search_shape(api_client: TestClient):
                          "image_path", "snippet", "score"}
     assert item["image_path"].startswith("frames/")
     assert body["total"] == 1
+
+
+def test_search_ts_is_iso8601_with_tz(api_client: TestClient):
+    r = api_client.get("/search", params={"q": "youtube"})
+    ts = r.json()["items"][0]["ts"]
+    dt = datetime.fromisoformat(ts)
+    assert dt.tzinfo is not None
+    assert ts.endswith(("Z", "+05:30", "+05:00"))  # a concrete offset, not naive
+    r = api_client.get("/frames")
+    for it in r.json()["items"]:
+        assert datetime.fromisoformat(it["ts"]).tzinfo is not None
 
 
 def test_search_requires_q(api_client: TestClient):
@@ -199,4 +212,6 @@ def test_status(api_client: TestClient):
     assert body["db"]["frames_today"] == 8
     assert body["capture"]["alive"] is False
     assert body["llama"]["reachable"] is True
+    assert body["tracing"]["enabled"] is False
+    assert body["tracing"]["reason"] == "LANGFUSE_* env vars unset"
     assert body["pipes"]["last_runs"] == {"day-recap": None, "time-breakdown": None}

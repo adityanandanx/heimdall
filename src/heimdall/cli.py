@@ -23,7 +23,7 @@ from heimdall.timeutil import parse_day, today_str
 app = typer.Typer(help="heimdall — local screen memory", no_args_is_help=True)
 
 _cfg: Config = load_config()
-_client_factory: Callable[[Config, object | None], object] | None = None
+_client_factory: Callable[[Config], object] | None = None
 
 
 class ApiError(Exception):
@@ -59,7 +59,7 @@ class ApiClient:
 
 def _client(cfg: Config) -> ApiClient:
     if _client_factory is not None:
-        return _client_factory(cfg, None)
+        return _client_factory(cfg)
     base = cfg.api.bind
     if base in ("0.0.0.0", "::"):
         base = "127.0.0.1"
@@ -180,6 +180,8 @@ def status(json_output: bool = typer.Option(False, "--json")) -> None:
     cap = data["capture"]
     print(f"capture: {'alive' if cap['alive'] else 'DOWN'}")
     print(f"llama: {'up' if data['llama']['reachable'] else 'down'}")
+    tr = data["tracing"]
+    print(f"tracing: {'ON' if tr['enabled'] else 'off (' + tr['reason'] + ')'}")
     for name, ts in data["pipes"]["last_runs"].items():
         print(f"last {name}: {ts or 'never'}")
 

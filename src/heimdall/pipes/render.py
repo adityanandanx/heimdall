@@ -6,10 +6,24 @@ format the deterministic multi-day merge parses back out of day files.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Iterable
 
 BREAKDOWN_TABLE_HEADER = "| Category | Minutes |"
 FOOTNOTE = "_Movie and music time derives from playback/title spans, not per-frame captures._"
+
+
+def write_markdown(markdown: str, filename: str, db_path: str | Path,
+                   output_dir: str | Path | None = None) -> str:
+    """Render payload -> disk, returning the path relative to the data dir.
+
+    Shared by the pipes so the write+mkdir+relative-path dance lives in one place.
+    """
+    out_dir = Path(output_dir) if output_dir else Path(db_path).parent / "output"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / filename
+    path.write_text(markdown, encoding="utf-8")
+    return str(path.relative_to(Path(db_path).parent))
 
 
 def _yaml_value(v) -> str:

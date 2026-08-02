@@ -16,7 +16,7 @@ from fastapi.testclient import TestClient
 from heimdall.api.app import create_app
 from heimdall.capture.spans import track_playing_ms
 from heimdall.config import Config
-from heimdall.db import Database, initialize
+from heimdall.db import Database, init_db
 from heimdall.timeutil import day_bounds
 
 FIXTURE_DAY = "2026-08-02"
@@ -36,7 +36,7 @@ FIXTURE_FRAMES = [
 
 def build_day_db(db_path: Path, day: str = FIXTURE_DAY) -> Database:
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    initialize(db_path)
+    init_db(db_path)
     db = Database(db_path)
     start_ms, _ = day_bounds(day)
     for i, (off, cls, title, ocr, trig) in enumerate(FIXTURE_FRAMES):
@@ -46,8 +46,8 @@ def build_day_db(db_path: Path, day: str = FIXTURE_DAY) -> Database:
         image.write_bytes(b"\xff\xd8\xff\xe0" + f"fixture{i}".encode())
         db.insert_frame({
             "ts": start_ms + off * 60_000,
-            "monitor": "eDP-1",
-            "workspace": "2:2",
+            "monitor": 0,
+            "workspace": 2,
             "window_class": cls,
             "window_title": title,
             "fullscreen": 0,

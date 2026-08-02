@@ -20,12 +20,12 @@ def mock_api_transport() -> httpx.MockTransport:
             return httpx.Response(200, json={
                 "total": 2,
                 "items": [
-                    {"id": 1, "ts": 1000, "window_class": "firefox",
-                     "window_title": "youtube.com/watch?v=x", "workspace": "2:2",
+                    {"id": 1, "ts": "2026-08-02T10:30:00+05:30", "window_class": "firefox",
+                     "window_title": "youtube.com/watch?v=x", "workspace": 2,
                      "image_path": "frames/2026/08/02/1.jpg",
                      "snippet": "watching **rick astley**", "score": -1.2},
-                    {"id": 2, "ts": 2000, "window_class": "code",
-                     "window_title": "capture.py — heimdall", "workspace": "2:2",
+                    {"id": 2, "ts": "2026-08-02T11:00:00+05:30", "window_class": "code",
+                     "window_title": "capture.py — heimdall", "workspace": 2,
                      "image_path": "frames/2026/08/02/2.jpg",
                      "snippet": "event loop", "score": -0.8},
                 ],
@@ -48,6 +48,7 @@ def mock_api_transport() -> httpx.MockTransport:
                 "db": {"frames_today": 8, "size_bytes": 4096},
                 "capture": {"alive": True, "last_event_ts": 1785700000000},
                 "llama": {"reachable": True},
+                "tracing": {"enabled": False, "reason": "LANGFUSE_* env vars unset"},
                 "pipes": {"last_runs": {"day-recap": None, "time-breakdown": "2026-08-02T23:05:00+05:30"}},
             })
         return httpx.Response(404, json={"detail": "not found"})
@@ -63,7 +64,7 @@ def config_path(tmp_path: Path) -> Path:
 
 
 def run_cli(argv: list[str], config_path: Path, transport: httpx.MockTransport, capsys):
-    cli._client_factory = lambda cfg, _: cli.ApiClient("http://127.0.0.1:1", transport=transport)
+    cli._client_factory = lambda cfg: cli.ApiClient("http://127.0.0.1:1", transport=transport)
     try:
         cli.main(["--config", str(config_path)] + argv)
     finally:
@@ -102,6 +103,7 @@ def test_status_renders(config_path, capsys):
     assert "8 frames today" in out
     assert "capture: alive" in out
     assert "llama: up" in out
+    assert "tracing: off (LANGFUSE_* env vars unset)" in out
     assert "last time-breakdown: 2026-08-02T23:05:00+05:30" in out
 
 
