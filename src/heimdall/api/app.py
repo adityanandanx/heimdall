@@ -1,0 +1,51 @@
+"""FastAPI application factory for heimdall (primary testing seam).
+
+Injects config, a fixture DB path and an LLM transport so tests can run the
+whole HTTP surface against a temp database with the LLM mocked.
+"""
+
+from __future__ import annotations
+
+import time
+from pathlib import Path
+
+import httpx
+from fastapi import FastAPI
+
+from heimdall import __version__
+from heimdall.config import Config
+from heimdall.db import Database, initialize
+from heimdall.pipes.llm import LlmClient
+from heimdall.scheduler import start_scheduler as start_scheduler_fn
+from heimdall.api.routers import health_router, search_router, frames_router, pipes_router, status_router
+
+
+def create_app(config: Config, *, db_path: str | Path | None = None,
+               llm_transport: httpx.AsyncBaseTransport | None = None,
+               start_scheduler: bool = False) -> FastAPI:
+    data = config.data_path
+    db_path = Path(db_path) if db_path else data / "data.db"
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    initialize(db_path)
+
+    llm = LlmClient(config.llama_server.base_url, config.llama_server.model, transport=llm_transport)
+
+    app = FastAPI(title="heimdall", version=__version__)
+    app.state.config = config
+    app.state.db_path = db_path
+    app.state.db = Database(db_path)
+    app.state.llm = llm
+    app.state.started = time.time()
+    app.state.last_runs: dict[str, str] = {}
+    app.state.transport = llm_transport
+
+    app.include_router(health_router)
+    app.include_router(search_router)
+    app.include_router(frames_router)
+    app.include_router(pipes_router)
+    app.include_router(status_router)
+
+    if start_scheduler:
+        start_scheduler_fn(app)
+
+    return app
