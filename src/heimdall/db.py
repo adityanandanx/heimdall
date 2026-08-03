@@ -384,13 +384,16 @@ class Database:
 
     def search(self, query: str, *, window_class: str | None = None,
                start: int | None = None, end: int | None = None,
-               limit: int = 20, offset: int = 0) -> tuple[int, list[dict]]:
+               limit: int = 20, offset: int = 0,
+               order: str = "score") -> tuple[int, list[dict]]:
         """Full-text search over a11y/OCR text, window title and class.
 
         bm25 weights: a11y/OCR 1.0, title 2.0, class 1.0 (titles are cleaner
         than either text source). snippet comes from the winner — a11y_text
         when the tree won, else ocr_text — with `**` highlight markers.
-        Raises sqlite3.OperationalError on an invalid FTS5 MATCH.
+        `order="ts"` sorts newest-first instead of by bm25 score (the #37
+        merged-search timeline). Raises sqlite3.OperationalError on an invalid
+        FTS5 MATCH.
         """
         self.query_count += 1
         where, params = [], []
@@ -405,13 +408,14 @@ class Database:
         if end is not None:
             where.append("f.ts <= ?")
             params.append(end)
+        order_by = "f.ts DESC" if order == "ts" else "score"
         sql = (
             "SELECT f.id, f.ts, f.window_class, f.window_title, f.workspace, f.image_path,"
             " COALESCE(snippet(frames_fts, 0, '**', '**', ' … ', 14),"
             "          snippet(frames_fts, 1, '**', '**', ' … ', 14)) AS snippet,"
             " bm25(frames_fts, 1.0, 1.0, 2.0, 1.0) AS score"
             " FROM frames_fts JOIN frames f ON f.id = frames_fts.rowid"
-            f" WHERE {' AND '.join(where)} ORDER BY score"
+            f" WHERE {' AND '.join(where)} ORDER BY {order_by}"
             " LIMIT ? OFFSET ?"
         )
         with self._lock, self.conn() as conn:
@@ -559,11 +563,15 @@ class Database:
             return _session_item(row) if row else None
 
     def search_watch_sessions(self, query: str, *, player: str | None = None,
-                              limit: int = 20, offset: int = 0) -> tuple[int, list[dict]]:
+                              start: int | None = None, end: int | None = None,
+                              limit: int = 20, offset: int = 0,
+                              order: str = "score") -> tuple[int, list[dict]]:
         """FTS5 over watch_sessions title/source — the #41 merged-search seam.
 
         bm25 weights: title 2.0, source 1.0 (titles are cleaner identifiers).
-        Raises sqlite3.OperationalError on an invalid FTS5 MATCH.
+        `order="ts"` sorts by ts_start newest-first instead of by bm25 score
+        (the #37 merged-search timeline). Raises sqlite3.OperationalError on an
+        invalid FTS5 MATCH.
         """
         self.query_count += 1
         where = ["watch_sessions_fts MATCH ?"]
@@ -571,6 +579,13 @@ class Database:
         if player is not None:
             where.append("s.player = ?")
             params.append(player)
+        if start is not None:
+            where.append("s.ts_start >= ?")
+            params.append(start)
+        if end is not None:
+            where.append("s.ts_start <= ?")
+            params.append(end)
+        order_by = "s.ts_start DESC" if order == "ts" else "score"
         sql = (
             "SELECT s.id, s.player, s.media_title, s.media_source, s.ts_start, s.ts_end,"
             " s.pos_start, s.pos_end, s.length, s.ranges,"
@@ -578,7 +593,7 @@ class Database:
             "          snippet(watch_sessions_fts, 1, '**', '**', ' … ', 14)) AS snippet,"
             " bm25(watch_sessions_fts, 2.0, 1.0) AS score"
             " FROM watch_sessions_fts JOIN watch_sessions s ON s.id = watch_sessions_fts.rowid"
-            f" WHERE {' AND '.join(where)} ORDER BY score"
+            f" WHERE {' AND '.join(where)} ORDER BY {order_by}"
             " LIMIT ? OFFSET ?"
         )
         with self._lock, self.conn() as conn:

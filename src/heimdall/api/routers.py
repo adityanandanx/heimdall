@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import sqlite3
 import time
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -95,23 +95,65 @@ def health(state: Any = Depends(_state)) -> dict:
 def search(
     state: Any = Depends(_state),
     q: str = Query(..., min_length=1),
+    kind: Literal["frame", "session"] | None = Query(None),
     window_class: str | None = None,
+    player: str | None = None,
     start: str | None = None,
     end: str | None = None,
     limit: int = Query(DEFAULT_LIMIT, ge=1),
     offset: int = Query(0, ge=0),
 ) -> dict:
+    """Merged full-text search over frames (a11y/OCR/title) and watch sessions
+    (media title/source), with `kind: frame|session` on every item (#37).
+
+    `kind=frame` and `kind=session` filter to one surface; the default mixes
+    both into a single newest-first timeline. bm25 is scored per surface.
+    Invalid FTS5 syntax is a 422, matching the single-surface behavior.
+    """
     limit, offset = _paginate(limit, offset)
     start_ms = _parse_time(start, "start")
     end_ms = _parse_time(end, "end")
     try:
-        total, items = state.db.search(
-            q, window_class=window_class, start=start_ms, end=end_ms,
-            limit=limit, offset=offset,
-        )
+        if kind == "session":
+            total, items = state.db.search_watch_sessions(
+                q, player=player, start=start_ms, end=end_ms,
+                limit=limit, offset=offset)
+            items = _session_iso(items)
+        elif kind == "frame":
+            total, items = state.db.search(
+                q, window_class=window_class, start=start_ms, end=end_ms,
+                limit=limit, offset=offset)
+            items = _iso(items)
+        else:
+            total, items = _merge_search(state, q, window_class, player,
+                                         start_ms, end_ms, limit, offset)
     except sqlite3.OperationalError as exc:
         raise HTTPException(status_code=422, detail=f"invalid search query: {exc}")
-    return {"total": total, "items": _iso(items)}
+    for it in items:
+        it["kind"] = "session" if "ts_start" in it else "frame"
+    return {"total": total, "items": items}
+
+
+def _merge_search(state: Any, q: str, window_class: str | None, player: str | None,
+                  start_ms: int | None, end_ms: int | None,
+                  limit: int, offset: int) -> tuple[int, list[dict]]:
+    """Both surfaces, newest-first, tagged by kind (#37).
+
+    Each surface is fetched with `offset + limit` rows already sorted newest-
+    first, then merged and re-sliced so pagination stays correct across kinds.
+    """
+    frame_total, frames = state.db.search(
+        q, window_class=window_class, start=start_ms, end=end_ms,
+        limit=limit + offset, offset=0, order="ts")
+    sess_total, sessions = state.db.search_watch_sessions(
+        q, player=player, start=start_ms, end=end_ms,
+        limit=limit + offset, offset=0, order="ts")
+    pairs = [(f["ts"], f) for f in frames] + [(s["ts_start"], s) for s in sessions]
+    pairs.sort(key=lambda p: p[0], reverse=True)
+    items = [it for _, it in pairs[offset:offset + limit]]
+    _iso([it for it in items if "ts_start" not in it])
+    _session_iso([it for it in items if "ts_start" in it])
+    return frame_total + sess_total, items
 
 
 @frames_router.get("/frames")

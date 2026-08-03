@@ -34,8 +34,9 @@ def test_search_shape(api_client: TestClient):
     assert set(body) == {"total", "items"}
     item = body["items"][0]
     assert set(item) == {"id", "ts", "window_class", "window_title", "workspace",
-                         "image_path", "snippet", "score"}
+                         "image_path", "snippet", "score", "kind"}
     assert item["image_path"].startswith("frames/")
+    assert item["kind"] == "frame"
     assert body["total"] == 1
 
 
@@ -93,6 +94,81 @@ def test_search_time_range_and_pagination(api_client: TestClient):
     assert r3.status_code == 200  # limit clamped to max 100
     r4 = api_client.get("/search", params={"q": "docs OR terminal", "limit": 0})
     assert r4.status_code == 422
+
+
+def test_search_kind_frame_filter(api_client: TestClient, db):
+    """kind=frame keeps only frame hits; sessions are excluded (#37)."""
+    _insert_session(db, title="Inception (2010)", wall_ms=1_000)
+    body = api_client.get("/search", params={"q": "inception", "kind": "frame"}).json()
+    assert body["total"] == 1
+    assert body["items"][0]["window_title"] == "Inception (2010)"
+    assert all(it["kind"] == "frame" for it in body["items"])
+
+
+def test_search_kind_session_filter(api_client: TestClient, db):
+    """kind=session keeps only session hits; frames are excluded (#37)."""
+    _insert_session(db, title="Inception (2010)", wall_ms=1_000)
+    body = api_client.get("/search", params={"q": "inception", "kind": "session"}).json()
+    assert body["total"] == 1
+    item = body["items"][0]
+    assert item["kind"] == "session"
+    for key in ("id", "player", "media_title", "media_source", "ts_start", "ts_end",
+                "snippet", "score"):
+        assert key in item
+    assert item["media_title"] == "Inception (2010)"
+    assert datetime.fromisoformat(item["ts_start"]).tzinfo is not None
+
+
+def test_search_kind_invalid(api_client: TestClient):
+    assert api_client.get("/search", params={"q": "youtube", "kind": "bogus"}).status_code == 422
+
+
+def test_search_mixed_kinds_newest_first(api_client: TestClient, db):
+    """Default /search mixes frames + sessions into one newest-first timeline."""
+    start_ms, _ = day_bounds(FIXTURE_DAY)
+    _insert_session(db, title="Inception (2010)", wall_ms=start_ms + 55 * 60_000)
+    body = api_client.get("/search", params={"q": "inception"}).json()
+    assert body["total"] == 2
+    kinds = [it["kind"] for it in body["items"]]
+    assert kinds == ["session", "frame"]  # session at +55 beats the mpv frame at +50
+    assert body["items"][0]["ts_start"] > body["items"][1]["ts"]
+
+
+def test_search_crosses_frame_text_and_session_title(api_client: TestClient, db):
+    """One query matches a frame's a11y/OCR text AND a session's media title."""
+    start_ms, _ = day_bounds(FIXTURE_DAY)
+    _insert_session(db, title="checkpointers deep dive", wall_ms=start_ms + 10 * 60_000)
+    body = api_client.get("/search", params={"q": "checkpointers"}).json()
+    assert body["total"] == 2
+    kinds = [it["kind"] for it in body["items"]]
+    assert kinds == ["frame", "session"]  # frame at +20 is newer than the session at +10
+    assert "checkpointers" in body["items"][0]["snippet"]  # a11y-text hit
+    assert body["items"][1]["media_title"] == "checkpointers deep dive"
+
+
+def test_search_time_range_applies_to_sessions(api_client: TestClient, db):
+    """start/end filter the session surface too, not just frames (#37)."""
+    start_ms, _ = day_bounds(FIXTURE_DAY)
+    _insert_session(db, title="Inception (2010)", wall_ms=start_ms + 10 * 60_000)
+    body = api_client.get("/search", params={
+        "q": "inception",
+        "start": ts_to_iso(start_ms + 40 * 60_000),
+        "end": ts_to_iso(start_ms + 60 * 60_000),
+    }).json()
+    assert body["total"] == 1  # only the mpv frame at +50; the session at +10 is cut
+    assert body["items"][0]["kind"] == "frame"
+
+
+def test_search_merged_pagination(api_client: TestClient, db):
+    """Paging slices across the merged timeline, keeping totals consistent."""
+    start_ms, _ = day_bounds(FIXTURE_DAY)
+    _insert_session(db, title="Inception (2010)", wall_ms=start_ms + 55 * 60_000)
+    page1 = api_client.get("/search", params={"q": "inception", "limit": 1}).json()
+    assert page1["total"] == 2
+    assert [it["kind"] for it in page1["items"]] == ["session"]
+    page2 = api_client.get("/search", params={"q": "inception", "limit": 1, "offset": 1}).json()
+    assert page2["total"] == 2
+    assert [it["kind"] for it in page2["items"]] == ["frame"]
 
 
 # ---- /frames ----

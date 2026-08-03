@@ -20,11 +20,13 @@ def mock_api_transport() -> httpx.MockTransport:
             return httpx.Response(200, json={
                 "total": 2,
                 "items": [
-                    {"id": 1, "ts": "2026-08-02T10:30:00+05:30", "window_class": "firefox",
+                    {"id": 1, "ts": "2026-08-02T10:30:00+05:30", "kind": "frame",
+                     "window_class": "firefox",
                      "window_title": "youtube.com/watch?v=x", "workspace": 2,
                      "image_path": "frames/2026/08/02/1.jpg",
                      "snippet": "watching **rick astley**", "score": -1.2},
-                    {"id": 2, "ts": "2026-08-02T11:00:00+05:30", "window_class": "code",
+                    {"id": 2, "ts": "2026-08-02T11:00:00+05:30", "kind": "frame",
+                     "window_class": "code",
                      "window_title": "capture.py — heimdall", "workspace": 2,
                      "image_path": "frames/2026/08/02/2.jpg",
                      "snippet": "event loop", "score": -0.8},
@@ -92,6 +94,32 @@ def test_search_renders_lines(config_path, capsys):
     out = run_cli(["search", "youtube"], config_path, mock_api_transport(), capsys)
     assert "youtube.com/watch?v=x" in out
     assert "rick astley" in out
+    assert "| frame |" in out
+    assert "2 result(s)" in out
+
+
+def test_search_renders_session_kind(config_path, capsys):
+    """heimdall search renders session hits with their kind tag (v2 #37)."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/search":
+            return httpx.Response(200, json={
+                "total": 2,
+                "items": [
+                    {"id": 7, "kind": "session", "player": "vlc",
+                     "media_title": "Inception (2010)", "media_source": None,
+                     "ts_start": "2026-08-02T21:00:00+05:30", "ts_end": None,
+                     "snippet": "**Inception** (2010)", "score": -1.5},
+                    {"id": 1, "ts": "2026-08-02T10:30:00+05:30", "kind": "frame",
+                     "window_class": "code", "window_title": "capture.py — heimdall",
+                     "workspace": 2, "image_path": "frames/2026/08/02/1.jpg",
+                     "snippet": "event loop", "score": -0.8},
+                ],
+            })
+        return httpx.Response(404, json={"detail": "not found"})
+
+    out = run_cli(["search", "inception"], config_path, httpx.MockTransport(handler), capsys)
+    assert "| session | vlc | Inception (2010)" in out
+    assert "| frame | code | capture.py — heimdall" in out
     assert "2 result(s)" in out
 
 
@@ -102,7 +130,8 @@ def test_search_renders_a11y_snippet(config_path, capsys):
             return httpx.Response(200, json={
                 "total": 1,
                 "items": [{
-                    "id": 1, "ts": "2026-08-02T10:30:00+05:30", "window_class": "code",
+                    "id": 1, "ts": "2026-08-02T10:30:00+05:30", "kind": "frame",
+                    "window_class": "code",
                     "window_title": "capture.py — heimdall", "workspace": 2,
                     "image_path": "frames/2026/08/02/1.jpg",
                     "snippet": "event loop **debounce** and throttle", "score": -1.2,

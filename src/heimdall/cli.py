@@ -102,23 +102,28 @@ def serve() -> None:
 @app.command("search")
 def search(
     q: str,
+    kind: str = typer.Option(None, "--kind"),
     window_class: str = typer.Option(None, "--window-class"),
+    player: str = typer.Option(None, "--player"),
     start: str = typer.Option(None, "--start"),
     end: str = typer.Option(None, "--end"),
     limit: int = typer.Option(10, "--limit"),
     offset: int = typer.Option(0, "--offset"),
     json_output: bool = typer.Option(False, "--json"),
 ) -> None:
-    """Full-text search over OCR + window titles."""
+    """Full-text search over frames (a11y/OCR + titles) and watch sessions."""
     data = _client(_cfg).get("/search", {
-        "q": q, "window_class": window_class, "start": start, "end": end,
-        "limit": limit, "offset": offset,
+        "q": q, "kind": kind, "window_class": window_class, "player": player,
+        "start": start, "end": end, "limit": limit, "offset": offset,
     })
     if json_output:
         print(json.dumps(data, ensure_ascii=False, indent=2))
         return
     for item in data["items"]:
-        print(f"{item['ts']} | {item['window_class']} | {item['window_title']}")
+        if item["kind"] == "session":
+            print(f"{item['ts_start']} | session | {item['player']} | {item['media_title']}")
+        else:
+            print(f"{item['ts']} | frame | {item['window_class']} | {item['window_title']}")
         print(f"  {item['snippet']}  (score {item['score']:.3f})")
     print(f"{data['total']} result(s)")
 
