@@ -4,3 +4,5 @@ __pycache__/
 *.pyc
 .heimdall/
 prototypes/
+
+extensions/heimdall-messenger/key.pem

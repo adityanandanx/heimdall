@@ -13,6 +13,7 @@ from typing import Any, Literal
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse
+from pydantic import BaseModel
 
 from heimdall import __version__
 from heimdall.config import Config
@@ -243,6 +244,29 @@ def status(state: Any = Depends(_state)) -> dict:
         "tracing": {"enabled": gate.enabled, "reason": gate.reason},
         "pipes": {"last_runs": {name: state.last_runs.get(name) for name in registered_pipes()}},
     }
+
+
+class MediaLiveIn(BaseModel):
+    title: str
+    href: str
+    current_time_us: int | None = None
+
+
+@sessions_router.post("/media/live")
+def media_live(payload: MediaLiveIn, state: Any = Depends(_state)) -> dict:
+    """Ingest one tab's streamed reading from the native-messaging host (#44).
+
+    The extension host POSTs the active page's title/URL/video time here; the
+    row lands in ``media_stream`` where the daemon's extension resolver reads
+    it. Fail-soft by design — a bad payload is a 422, never a daemon crash.
+    """
+    state.db.upsert_media_stream(
+        href=payload.href,
+        tab_title=payload.title,
+        current_time_us=payload.current_time_us,
+        ts=int(time.time() * 1000),
+    )
+    return {"ok": True}
 
 
 @sessions_router.get("/sessions")

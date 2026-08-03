@@ -46,3 +46,16 @@ def test_unknown_capture_key_warns(tmp_path):
             "data_dir": str(tmp_path),
             "capture": {"bogus": 1},
         }))
+
+
+def test_watch_media_resolver_defaults_to_extension(tmp_path):
+    cfg = load_config(_write(tmp_path, {"data_dir": str(tmp_path)}))
+    assert cfg.watch.media_resolver == "extension"
+
+
+def test_watch_media_resolver_parses_cdp(tmp_path):
+    cfg = load_config(_write(tmp_path, {
+        "data_dir": str(tmp_path),
+        "watch": {"media_resolver": "cdp"},
+    }))
+    assert cfg.watch.media_resolver == "cdp"

@@ -46,6 +46,7 @@ class WatchConfig:
 
     pause_ends_session_s: float = 60.0
     poll_interval_s: float = 30.0
+    media_resolver: str = "extension"  # extension|cdp: how Chromium URLs are resolved (#44)
 
 
 @dataclass
@@ -151,10 +152,11 @@ def load_config(path: str | None = None) -> Config:
         )
     if "watch" in raw:
         wat = raw["watch"] or {}
-        _warn_unknown("watch", {"pause_ends_session_s", "poll_interval_s"}, wat)
+        _warn_unknown("watch", {"pause_ends_session_s", "poll_interval_s", "media_resolver"}, wat)
         cfg.watch = WatchConfig(
             pause_ends_session_s=float(_scalar("pause_ends_session_s", wat, cfg.watch.pause_ends_session_s)),
             poll_interval_s=float(_scalar("poll_interval_s", wat, cfg.watch.poll_interval_s)),
+            media_resolver=_scalar("media_resolver", wat, cfg.watch.media_resolver),
         )
     if "scheduler" in raw:
         sch = raw["scheduler"] or {}

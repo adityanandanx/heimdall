@@ -126,6 +126,13 @@ CREATE INDEX IF NOT EXISTS idx_frames_trigger ON frames(trigger);
 CREATE INDEX IF NOT EXISTS idx_tracks_ts ON tracks(ts);
 CREATE INDEX IF NOT EXISTS idx_watch_sessions_ts_start ON watch_sessions(ts_start);
 CREATE INDEX IF NOT EXISTS idx_watch_sessions_player ON watch_sessions(player);
+
+CREATE TABLE IF NOT EXISTS media_stream (
+    href TEXT PRIMARY KEY,            -- the tab's URL, one row per tab (#44)
+    tab_title TEXT NOT NULL,          -- document.title from the extension stream
+    current_time_us INTEGER,          -- video.currentTime in microseconds
+    ts INTEGER NOT NULL               -- UTC epoch ms of the last sighting
+);
 """ + FTS_SCHEMA + WATCH_FTS_SCHEMA
 
 FRAME_COLS = (
@@ -461,6 +468,29 @@ class Database:
         with self._lock, self.conn() as conn:
             conn.execute("INSERT OR IGNORE INTO events (ts, raw) VALUES (?, ?)", (ts, raw))
             conn.commit()
+
+    # ---- extension media stream (#44) ----
+
+    def upsert_media_stream(self, *, href: str, tab_title: str,
+                            current_time_us: int | None, ts: int) -> None:
+        """Upsert one tab's streamed reading; the extension sends ~1/sec."""
+        with self._lock, self.conn() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO media_stream (href, tab_title, current_time_us, ts)"
+                " VALUES (?, ?, ?, ?)",
+                (href, tab_title, current_time_us, ts),
+            )
+            conn.commit()
+
+    def latest_media_stream(self) -> list[dict]:
+        """Every tab's latest streamed reading, newest sighting first."""
+        self.query_count += 1
+        with self._lock, self.conn() as conn:
+            rows = conn.execute(
+                "SELECT href, tab_title, current_time_us, ts FROM media_stream"
+                " ORDER BY ts DESC"
+            ).fetchall()
+            return [dict(r) for r in rows]
 
     # ---- watch sessions ----
 

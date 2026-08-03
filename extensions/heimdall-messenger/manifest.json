@@ -1,0 +1,18 @@
+{
+  "manifest_version": 3,
+  "name": "heimdall messenger",
+  "version": "0.1.0",
+  "description": "Streams the active YouTube tab's URL and video time to the heimdall daemon via a native messaging host.",
+  "permissions": ["nativeMessaging"],
+  "host_permissions": ["https://www.youtube.com/*", "https://youtube.com/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://www.youtube.com/*", "https://youtube.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

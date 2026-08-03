@@ -438,6 +438,31 @@ def test_sessions_preview_marks_live_rows(api_client: TestClient, db):
     assert " finished — auto-refresh 5s" in r.text
 
 
+# ---- /media/live (extension stream, #44) ----
+
+def test_media_live_ingests_stream_row(api_client: TestClient, db):
+    """POST /media/live lands a tab's reading where the resolver reads it."""
+    r = api_client.post("/media/live", json={
+        "title": "Rick Astley - Never Gonna Give You Up - YouTube",
+        "href": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+        "current_time_us": 900_000_000,
+    })
+    assert r.status_code == 200
+    assert r.json() == {"ok": True}
+    rows = db.latest_media_stream()
+    assert len(rows) == 1
+    assert rows[0]["href"] == "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+    assert rows[0]["current_time_us"] == 900_000_000
+
+
+def test_media_live_requires_href(api_client: TestClient, db):
+    assert api_client.post("/media/live", json={"title": "x"}).status_code == 422
+    assert api_client.post("/media/live", json={
+        "title": "x", "href": "y", "current_time_us": "nope",
+    }).status_code == 422
+    assert db.latest_media_stream() == []
+
+
 # ---- /status ----
 
 def test_status(api_client: TestClient):

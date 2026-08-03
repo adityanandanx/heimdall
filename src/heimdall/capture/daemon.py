@@ -51,7 +51,10 @@ class CaptureTools:
     list_players: Callable[[], list[str]] = field(default=None)
     playerctl_position: Callable[[str], Optional[int]] = field(default=None)
     cdp_resolve: Callable[[str, Optional[int]], Optional[dict]] = field(default=None)
+    media_resolver: str = "extension"  # extension|cdp: Chromium URL source of truth (#44)
+    db: object = field(default=None, repr=False)
     _cdp_session: object = field(default=None, init=False, repr=False)
+    _ext_resolver: object = field(default=None, init=False, repr=False)
 
     def __post_init__(self):
         if self.grim is None:
@@ -69,7 +72,10 @@ class CaptureTools:
         if self.playerctl_position is None:
             self.playerctl_position = self._playerctl_position
         if self.cdp_resolve is None:
-            self.cdp_resolve = self._cdp_resolve
+            if self.media_resolver == "cdp":
+                self.cdp_resolve = self._cdp_resolve
+            else:
+                self.cdp_resolve = self._extension_resolve
 
     def find_socket(self) -> str:
         for inst in os.listdir(self.socket_dir):
@@ -157,6 +163,22 @@ class CaptureTools:
             window_title=window_title, position_us=position_us,
         )
 
+    def _extension_resolve(self, window_title: str,
+                           position_us: Optional[int]) -> Optional[dict]:
+        """Resolve {media_source, media_id} from the extension stream (#44).
+
+        Reads the native-messaging stream (``media_stream`` table) and
+        title-matches the open session; an empty stream or missing db degrades
+        to title-only with no crash.
+        """
+        if self._ext_resolver is None:
+            if self.db is None:
+                return None
+            from heimdall.capture.extension import ExtensionResolver
+
+            self._ext_resolver = ExtensionResolver(self.db)
+        return self._ext_resolver.resolve(window_title, position_us)
+
     def socket_lines(self, should_stop: Callable[[], bool]) -> Iterable[str]:
         """Blocking generator of complete socket2 event lines.
 
@@ -207,10 +229,12 @@ class CaptureDaemon:
 
     def __init__(self, config: Config, tools: CaptureTools | None = None, db_path=None):
         self.config = config
-        self.tools = tools or CaptureTools()
         data = config.data_path
         self.db_path = Path(db_path) if db_path else data / "data.db"
         self.db = Database(self.db_path)
+        if tools is None:
+            tools = CaptureTools(media_resolver=config.watch.media_resolver, db=self.db)
+        self.tools = tools
         self.heartbeat = data / "capture.heartbeat"
         self.data = data
         self._stop = threading.Event()
