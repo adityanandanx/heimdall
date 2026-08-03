@@ -185,3 +185,123 @@ def test_spans_to_table_groups_by_window():
     by_title = {t["window_title"]: t["minutes"] for t in table}
     assert by_title["x.py"] == 20
     assert by_title["y.py"] == 30
+
+
+# ---- a11y-first extraction (v2 #33) ----
+
+def _content_bearing_tree():
+    return [{
+        "role": "application", "name": "Google Chrome", "text": "", "children": [
+            {"role": "frame", "name": "page - Google Chrome", "text": "", "children": [
+                {"role": "document web", "name": "", "text": "", "children": [
+                    {"role": "heading", "name": "", "text": "Accessibility Test Page"},
+                    {"role": "paragraph", "name": "", "text": "Hello world, the quick brown fox"},
+                    {"role": "link", "name": "Example link", "text": ""},
+                    {"role": "button", "name": "Click me 456", "text": ""},
+                    {"role": "list item", "name": "", "text": "First item"},
+                    {"role": "list item", "name": "", "text": "Second item 789"},
+                ]},
+            ]},
+        ]},
+    ]
+
+
+def _blank_tree():
+    """A shell-only tree (unflagged Chromium): no real content nodes."""
+    return [{
+        "role": "application", "name": "Google Chrome", "text": "", "children": [
+            {"role": "frame", "name": "page - Google Chrome", "text": ""},
+        ]},
+    ]
+
+
+class _FakeTools:
+    """CaptureTools with an injectable a11y reader; no subprocess tools."""
+
+    def __init__(self, reader):
+        self.a11y_read = reader
+        self.grim = lambda *a: b"jpeg"
+        self.activewindow = lambda: {"class": "google-chrome", "title": "page",
+                                     "workspace": {"id": 2, "name": "2"},
+                                     "at": [0, 0], "size": [10, 10]}
+
+
+def test_extract_worker_stores_a11y_when_content_bearing(tmp_path):
+    """A content-bearing tree becomes a11y_text/a11y_json; no ocr_text is set."""
+    from heimdall.capture.daemon import CaptureDaemon
+    from heimdall.config import Config
+    from heimdall.db import init_db
+
+    daemon = CaptureDaemon(Config(data_dir=tmp_path), tools=_FakeTools(lambda c, t: _content_bearing_tree()))
+    init_db(path=daemon.db_path)
+    frame_id = daemon.db.insert_frame(dict(ts=1, monitor=0, workspace=2,
+                                           window_class="google-chrome",
+                                           window_title="page", fullscreen=0,
+                                           trigger="activewindow", image_path="f.jpg",
+                                           image_bytes=1, ocr_text=None, ocr_sec=None))
+    daemon.extract_jobs.put((frame_id, "google-chrome", "page", b"jpeg"))
+    daemon.extract_jobs.put(None)
+    daemon._extract_worker()
+    frame = daemon.db.get_frame(frame_id)
+    assert frame["a11y_text"] == "Accessibility Test Page\nHello world, the quick brown fox\nExample link\nClick me 456\nFirst item\nSecond item 789"
+    assert "document web" in frame["a11y_json"]
+    assert frame["ocr_text"] is None
+    assert frame["ocr_sec"] is None
+    assert frame["ocr_engine"] is None
+
+
+def test_extract_worker_null_text_when_a11y_blind(tmp_path):
+    """kitty and other off-bus windows store NULL text; no OCR subprocess runs."""
+    from heimdall.capture.daemon import CaptureDaemon
+    from heimdall.config import Config
+    from heimdall.db import init_db
+
+    for reader in (lambda c, t: None, lambda c, t: _blank_tree()):
+        daemon = CaptureDaemon(Config(data_dir=tmp_path), tools=_FakeTools(reader))
+        init_db(path=daemon.db_path)
+        frame_id = daemon.db.insert_frame(dict(ts=1, monitor=0, workspace=2,
+                                               window_class="kitty", window_title="zsh",
+                                               fullscreen=0, trigger="activewindow",
+                                               image_path="f.jpg", image_bytes=1,
+                                               ocr_text=None, ocr_sec=None))
+        daemon.extract_jobs.put((frame_id, "kitty", "zsh", b"jpeg"))
+        daemon.extract_jobs.put(None)
+        daemon._extract_worker()
+        frame = daemon.db.get_frame(frame_id)
+        assert frame["a11y_text"] is None
+        assert frame["a11y_json"] is None
+        assert frame["ocr_text"] is None
+
+
+def test_capture_worker_passes_window_meta_for_extraction(tmp_path):
+    """The capture worker hands (frame_id, window_class, window_title, img) to
+    the extraction queue so the a11y reader can find the right window."""
+    from heimdall.capture.daemon import CaptureDaemon
+    from heimdall.config import Config
+    from heimdall.db import init_db
+
+    seen = []
+    tools = _FakeTools(lambda c, t: None)
+    tools.activewindow = lambda: {"class": "code", "title": "x.py — heimdall",
+                                  "workspace": {"id": 2, "name": "2"},
+                                  "at": [0, 0], "size": [10, 10]}
+    daemon = CaptureDaemon(Config(data_dir=tmp_path), tools=tools)
+    init_db(path=daemon.db_path)
+    daemon.jobs.put(("activewindow", 1))
+    daemon.jobs.put(None)
+    daemon._capture_worker()
+    assert daemon.extract_jobs.qsize() == 1
+    frame_id, cls, title, img = daemon.extract_jobs.get()
+    assert cls == "code"
+    assert title == "x.py — heimdall"
+    assert img == b"jpeg"
+    assert frame_id is not None
+
+
+def test_tesseract_removed_from_tools():
+    """The tesseract subprocess is retired: no ocr tool exists on the tools."""
+    from heimdall.capture.daemon import CaptureTools
+
+    tools = CaptureTools()
+    assert not hasattr(tools, "ocr")
+    assert not hasattr(tools, "_ocr")

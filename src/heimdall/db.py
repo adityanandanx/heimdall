@@ -27,7 +27,10 @@ CREATE TABLE IF NOT EXISTS frames (
     image_path TEXT NOT NULL,         -- relative to the data dir
     image_bytes INTEGER NOT NULL,
     ocr_text TEXT,
-    ocr_sec REAL
+    ocr_sec REAL,
+    a11y_text TEXT,                   -- flattened tree text; the winner when set
+    a11y_json TEXT,                   -- role/name/state structure, retained for retrieval
+    ocr_engine TEXT                   -- 'rapid' when the OCR path was used (v2 #34)
 );
 
 CREATE TABLE IF NOT EXISTS tracks (
@@ -45,26 +48,26 @@ CREATE TABLE IF NOT EXISTS events (
 );
 
 CREATE VIRTUAL TABLE IF NOT EXISTS frames_fts USING fts5(
-    ocr_text, window_title, window_class,
+    a11y_text, ocr_text, window_title, window_class,
     content='frames', content_rowid='id',
     tokenize='porter unicode61'
 );
 
 CREATE TRIGGER IF NOT EXISTS frames_ai AFTER INSERT ON frames BEGIN
-    INSERT INTO frames_fts(rowid, ocr_text, window_title, window_class)
-    VALUES (new.id, new.ocr_text, new.window_title, new.window_class);
+    INSERT INTO frames_fts(rowid, a11y_text, ocr_text, window_title, window_class)
+    VALUES (new.id, new.a11y_text, new.ocr_text, new.window_title, new.window_class);
 END;
 
 CREATE TRIGGER IF NOT EXISTS frames_ad AFTER DELETE ON frames BEGIN
-    INSERT INTO frames_fts(frames_fts, rowid, ocr_text, window_title, window_class)
-    VALUES ('delete', old.id, old.ocr_text, old.window_title, old.window_class);
+    INSERT INTO frames_fts(frames_fts, rowid, a11y_text, ocr_text, window_title, window_class)
+    VALUES ('delete', old.id, old.a11y_text, old.ocr_text, old.window_title, old.window_class);
 END;
 
 CREATE TRIGGER IF NOT EXISTS frames_au AFTER UPDATE ON frames BEGIN
-    INSERT INTO frames_fts(frames_fts, rowid, ocr_text, window_title, window_class)
-    VALUES ('delete', old.id, old.ocr_text, old.window_title, old.window_class);
-    INSERT INTO frames_fts(rowid, ocr_text, window_title, window_class)
-    VALUES (new.id, new.ocr_text, new.window_title, new.window_class);
+    INSERT INTO frames_fts(frames_fts, rowid, a11y_text, ocr_text, window_title, window_class)
+    VALUES ('delete', old.id, old.a11y_text, old.ocr_text, old.window_title, old.window_class);
+    INSERT INTO frames_fts(rowid, a11y_text, ocr_text, window_title, window_class)
+    VALUES (new.id, new.a11y_text, new.ocr_text, new.window_title, new.window_class);
 END;
 
 CREATE INDEX IF NOT EXISTS idx_frames_ts ON frames(ts);
@@ -73,9 +76,37 @@ CREATE INDEX IF NOT EXISTS idx_frames_trigger ON frames(trigger);
 CREATE INDEX IF NOT EXISTS idx_tracks_ts ON tracks(ts);
 """
 
+# The FTS table + sync triggers alone, so the v2 migration can drop/recreate
+# them against an existing v1 frames table after the ALTER TABLE.
+FTS_SCHEMA = """
+CREATE VIRTUAL TABLE IF NOT EXISTS frames_fts USING fts5(
+    a11y_text, ocr_text, window_title, window_class,
+    content='frames', content_rowid='id',
+    tokenize='porter unicode61'
+);
+
+CREATE TRIGGER IF NOT EXISTS frames_ai AFTER INSERT ON frames BEGIN
+    INSERT INTO frames_fts(rowid, a11y_text, ocr_text, window_title, window_class)
+    VALUES (new.id, new.a11y_text, new.ocr_text, new.window_title, new.window_class);
+END;
+
+CREATE TRIGGER IF NOT EXISTS frames_ad AFTER DELETE ON frames BEGIN
+    INSERT INTO frames_fts(frames_fts, rowid, a11y_text, ocr_text, window_title, window_class)
+    VALUES ('delete', old.id, old.a11y_text, old.ocr_text, old.window_title, old.window_class);
+END;
+
+CREATE TRIGGER IF NOT EXISTS frames_au AFTER UPDATE ON frames BEGIN
+    INSERT INTO frames_fts(frames_fts, rowid, a11y_text, ocr_text, window_title, window_class)
+    VALUES ('delete', old.id, old.a11y_text, old.ocr_text, old.window_title, old.window_class);
+    INSERT INTO frames_fts(rowid, a11y_text, ocr_text, window_title, window_class)
+    VALUES (new.id, new.a11y_text, new.ocr_text, new.window_title, new.window_class);
+END;
+"""
+
 FRAME_COLS = (
     "id", "ts", "monitor", "workspace", "window_class", "window_title",
     "fullscreen", "trigger", "image_path", "image_bytes", "ocr_text", "ocr_sec",
+    "a11y_text", "a11y_json", "ocr_engine",
 )
 
 SEARCH_COLS = ("id", "ts", "window_class", "window_title", "workspace", "image_path", "snippet", "score")
@@ -90,11 +121,40 @@ def connect(path: str | os.PathLike) -> sqlite3.Connection:
 
 
 def init_db(path: str | os.PathLike) -> None:
-    """Create the DB at path (if missing) and apply the schema."""
+    """Create the DB at path (if missing), apply the schema and migrate v1.
+
+    v1 DBs (tesseract-era) get the a11y columns added and frames_fts rebuilt to
+    index a11y_text; existing rows are preserved. Idempotent on every startup.
+    """
     conn = connect(path)
     conn.executescript(SCHEMA)
+    _migrate_v2(conn)
     conn.commit()
     conn.close()
+
+
+def _migrate_v2(conn: sqlite3.Connection) -> None:
+    """Add the v2 columns to an existing v1 frames table and rebuild FTS.
+
+    External-content FTS cannot add a column in place — it must be dropped and
+    recreated, then repopulated with `rebuild`. Triggers are recreated with it.
+    """
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(frames)")}
+    for col in ("a11y_text", "a11y_json", "ocr_engine"):
+        if col not in cols:
+            conn.execute(f"ALTER TABLE frames ADD COLUMN {col} TEXT")
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='frames_fts'"
+    ).fetchone()
+    fts_sql = row[0] if row else ""
+    if "a11y_text" in fts_sql:
+        return
+    conn.execute("DROP TRIGGER IF EXISTS frames_ai")
+    conn.execute("DROP TRIGGER IF EXISTS frames_ad")
+    conn.execute("DROP TRIGGER IF EXISTS frames_au")
+    conn.execute("DROP TABLE IF EXISTS frames_fts")
+    conn.executescript(FTS_SCHEMA)
+    conn.execute("INSERT INTO frames_fts(frames_fts) VALUES('rebuild')")
 
 
 class Database:
@@ -134,13 +194,41 @@ class Database:
         with self._lock, self.conn() as conn:
             cur = conn.execute(
                 "INSERT INTO frames (ts, monitor, workspace, window_class, window_title,"
-                " fullscreen, trigger, image_path, image_bytes, ocr_text, ocr_sec)"
+                " fullscreen, trigger, image_path, image_bytes, ocr_text, ocr_sec,"
+                " a11y_text, a11y_json, ocr_engine)"
                 " VALUES (:ts, :monitor, :workspace, :window_class, :window_title,"
-                " :fullscreen, :trigger, :image_path, :image_bytes, :ocr_text, :ocr_sec)",
-                values,
+                " :fullscreen, :trigger, :image_path, :image_bytes, :ocr_text, :ocr_sec,"
+                " :a11y_text, :a11y_json, :ocr_engine)",
+                {**values,
+                 "ocr_text": values.get("ocr_text"),
+                 "ocr_sec": values.get("ocr_sec"),
+                 "a11y_text": values.get("a11y_text"),
+                 "a11y_json": values.get("a11y_json"),
+                 "ocr_engine": values.get("ocr_engine")},
             )
             conn.commit()
             return cur.lastrowid
+
+    def set_frame_extraction(self, frame_id: int, **updates: str | None) -> None:
+        """Write extraction results for a frame; only the provided columns change.
+
+        The worker passes the fields the winning source produced — a11y_text /
+        a11y_json when the tree wins, a11y_text=None on an a11y-blind frame.
+        ocr_* columns stay untouched unless passed (the #34 OCR path).
+        """
+        if not updates:
+            return
+        allowed = ("a11y_text", "a11y_json", "ocr_text", "ocr_sec", "ocr_engine")
+        unknown = set(updates) - set(allowed)
+        if unknown:
+            raise ValueError(f"unknown extraction column(s): {sorted(unknown)}")
+        sets = ", ".join(f"{col} = ?" for col in updates)
+        with self._lock, self.conn() as conn:
+            conn.execute(
+                f"UPDATE frames SET {sets} WHERE id = ?",
+                (*updates.values(), frame_id),
+            )
+            conn.commit()
 
     def list_frames(self, *, window_class: str | None = None, trigger: str | None = None,
                     start: int | None = None, end: int | None = None,
@@ -213,10 +301,11 @@ class Database:
     def search(self, query: str, *, window_class: str | None = None,
                start: int | None = None, end: int | None = None,
                limit: int = 20, offset: int = 0) -> tuple[int, list[dict]]:
-        """Full-text search over OCR text, window title and class.
+        """Full-text search over a11y/OCR text, window title and class.
 
-        bm25 weights: OCR 1.0, title 2.0, class 1.0 (titles are cleaner than OCR).
-        snippet is taken from the OCR column with `**` highlight markers.
+        bm25 weights: a11y/OCR 1.0, title 2.0, class 1.0 (titles are cleaner
+        than either text source). snippet comes from the winner — a11y_text
+        when the tree won, else ocr_text — with `**` highlight markers.
         Raises sqlite3.OperationalError on an invalid FTS5 MATCH.
         """
         self.query_count += 1
@@ -234,8 +323,9 @@ class Database:
             params.append(end)
         sql = (
             "SELECT f.id, f.ts, f.window_class, f.window_title, f.workspace, f.image_path,"
-            " snippet(frames_fts, 0, '**', '**', ' … ', 14) AS snippet,"
-            " bm25(frames_fts, 1.0, 2.0, 1.0) AS score"
+            " COALESCE(snippet(frames_fts, 0, '**', '**', ' … ', 14),"
+            "          snippet(frames_fts, 1, '**', '**', ' … ', 14)) AS snippet,"
+            " bm25(frames_fts, 1.0, 1.0, 2.0, 1.0) AS score"
             " FROM frames_fts JOIN frames f ON f.id = frames_fts.rowid"
             f" WHERE {' AND '.join(where)} ORDER BY score"
             " LIMIT ? OFFSET ?"

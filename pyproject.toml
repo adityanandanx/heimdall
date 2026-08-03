@@ -11,6 +11,7 @@ dependencies = [
     "apscheduler>=3.11.3",
     "fastapi>=0.141.1",
     "httpx>=0.28.1",
+    "pygobject>=3.56.0",
     "pyyaml>=6.0.3",
     "typer>=0.27.0",
     "uvicorn[standard]>=0.52.1",

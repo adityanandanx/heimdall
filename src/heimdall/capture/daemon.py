@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Iterable, Optional
 
+from heimdall.capture.a11y import content_bearing, flatten_text
 from heimdall.capture.events import activewindow_signature, classify_trigger, is_duplicate, is_track_change, parse_socket2_line, should_capture, workspace_id
 from heimdall.config import Config, load_config
 from heimdall.db import Database, init_db
@@ -38,7 +39,7 @@ class CaptureTools:
     socket_dir: str = "/run/user/1000/hypr"
     grim: Callable[[int, int, int, int], Optional[bytes]] = field(default=None)
     activewindow: Callable[[], Optional[dict]] = field(default=None)
-    ocr: Callable[[bytes], tuple[float, str]] = field(default=None)
+    a11y_read: Callable[[str, str], Optional[list]] = field(default=None)
     playerctl_follow: Callable[[], Iterable[str]] = field(default=None)
 
     def __post_init__(self):
@@ -46,8 +47,8 @@ class CaptureTools:
             self.grim = self._grim_region
         if self.activewindow is None:
             self.activewindow = self._activewindow
-        if self.ocr is None:
-            self.ocr = self._ocr
+        if self.a11y_read is None:
+            self.a11y_read = self._a11y_read
         if self.playerctl_follow is None:
             self.playerctl_follow = self._playerctl_follow
 
@@ -77,14 +78,11 @@ class CaptureTools:
             return None
 
     @staticmethod
-    def _ocr(img: bytes) -> tuple[float, str]:
-        p = subprocess.Popen(
-            ["tesseract", "stdin", "stdout"],
-            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-        )
-        t0 = time.monotonic()
-        out, _ = p.communicate(img)
-        return time.monotonic() - t0, out.decode(errors="replace")
+    def _a11y_read(window_class: str, window_title: str) -> Optional[list]:
+        """AT-SPI tree for the window (class+title); None when off-bus."""
+        from heimdall.capture import a11y
+
+        return a11y.read_window_tree(window_class, window_title)
 
     @staticmethod
     def _playerctl_follow() -> Iterable[str]:
@@ -151,7 +149,7 @@ class CaptureDaemon:
         self._last_track_status: str | None = None
         self.events_q: queue.Queue[str] = queue.Queue()
         self.jobs: queue.Queue[Job] = queue.Queue()
-        self.ocr_jobs: queue.Queue[tuple[int, bytes]] = queue.Queue()
+        self.extract_jobs: queue.Queue[tuple[int, str, str, bytes]] = queue.Queue()
         self._threads: list[threading.Thread] = []
 
     # ---- threads ----
@@ -263,7 +261,9 @@ class CaptureDaemon:
                 continue
             frame_id = self._store_frame(ts, meta, trigger, img)
             if frame_id:
-                self.ocr_jobs.put((frame_id, img))
+                self.extract_jobs.put(
+                    (frame_id, meta.get("class") or "", meta.get("title") or "", img)
+                )
 
     def _store_frame(self, ts: int, meta: dict, trigger: str, img: bytes) -> Optional[int]:
         dt = time.localtime(ts / 1000)
@@ -286,17 +286,34 @@ class CaptureDaemon:
             "ocr_sec": None,
         })
 
-    def _ocr_worker(self) -> None:
+    def _extract_worker(self) -> None:
+        """Extraction queue: a11y read -> content-bearing test -> frame text.
+
+        A content-bearing tree wins and stores a11y_text + a11y_json; a11y-blind
+        windows store NULL text (the RapidOCR fallback owns them, ticket #34).
+        No OCR subprocess runs here — tesseract is retired (v2 #33).
+        """
+        if self.config.capture.extraction not in ("auto", "a11y", "ocr"):
+            log.warning("capture.extraction=%r is not a known mode; treating as auto",
+                        self.config.capture.extraction)
+        elif self.config.capture.extraction == "ocr":
+            log.warning("capture.extraction=ocr is not wired until the RapidOCR "
+                        "fallback (ticket #34); frames store NULL text")
         while True:
-            item = self.ocr_jobs.get()
+            item = self.extract_jobs.get()
             if item is None:
                 break
-            frame_id, img = item
-            secs, text = self.tools.ocr(img)
-            with self.db.conn() as conn:
-                conn.execute("UPDATE frames SET ocr_text = ?, ocr_sec = ? WHERE id = ?",
-                             (text, secs, frame_id))
-                conn.commit()
+            frame_id, window_class, window_title, _img = item
+            if self.config.capture.extraction in ("auto", "a11y"):
+                tree = self.tools.a11y_read(window_class, window_title)
+                if tree and content_bearing(tree):
+                    self.db.set_frame_extraction(
+                        frame_id,
+                        a11y_text=flatten_text(tree),
+                        a11y_json=json.dumps(tree, ensure_ascii=False),
+                    )
+                    continue
+            self.db.set_frame_extraction(frame_id, a11y_text=None, a11y_json=None)
 
     def _heartbeat_loop(self) -> None:
         while not self._stop.wait(15):
@@ -326,7 +343,7 @@ class CaptureDaemon:
             for i in range(max(1, self.config.capture.ocr_workers))
         ]
         threads += [
-            threading.Thread(target=self._ocr_worker, name=f"ocr-{i}", daemon=True)
+            threading.Thread(target=self._extract_worker, name=f"extract-{i}", daemon=True)
             for i in range(max(1, self.config.capture.ocr_workers))
         ]
         self._threads = threads
@@ -339,7 +356,7 @@ class CaptureDaemon:
         self._stop.set()
         self.jobs.put(None)
         for _ in self._threads:
-            self.ocr_jobs.put(None)
+            self.extract_jobs.put(None)
         for t in self._threads:
             t.join(timeout=3)
 

@@ -107,7 +107,8 @@ def test_frames_list(api_client: TestClient):
     assert ts == sorted(ts)
     item = body["items"][0]
     for key in ("id", "ts", "window_class", "window_title", "workspace", "monitor",
-                "fullscreen", "trigger", "image_path", "image_bytes", "ocr_text", "ocr_sec"):
+                "fullscreen", "trigger", "image_path", "image_bytes", "ocr_text", "ocr_sec",
+                "a11y_text", "a11y_json", "ocr_engine"):
         assert key in item
 
 
@@ -130,6 +131,46 @@ def test_frames_detail(api_client: TestClient):
 
 def test_frames_detail_404(api_client: TestClient):
     assert api_client.get("/frames/999999").status_code == 404
+
+
+def test_frame_detail_includes_a11y(api_client: TestClient):
+    """Frame detail carries the a11y winner: text + role/name structure."""
+    body = api_client.get("/frames").json()
+    a11y_id = next(it["id"] for it in body["items"] if it["a11y_text"])
+    r = api_client.get(f"/frames/{a11y_id}")
+    assert r.status_code == 200
+    frame = r.json()
+    assert frame["a11y_text"] == "event loop debounce and throttle\nAPScheduler cron daily recap"
+    assert "document web" in frame["a11y_json"]
+    assert frame["ocr_text"] is None
+
+    # a11y-blind frames keep NULL text in detail too
+    ocr_id = next(it["id"] for it in body["items"]
+                  if it["window_title"] == "youtube.com/watch?v=dQw4w9WgXcQ")
+    ocr_frame = api_client.get(f"/frames/{ocr_id}").json()
+    assert ocr_frame["a11y_text"] is None
+    assert ocr_frame["a11y_json"] is None
+    assert ocr_frame["ocr_text"] == "never gonna give you up rick astley"
+
+
+def test_search_matches_a11y_text(api_client: TestClient):
+    """a11y_won frames are searchable through their flattened tree text."""
+    r = api_client.get("/search", params={"q": "debounce"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["total"] >= 1
+    for it in body["items"]:
+        assert it["window_title"] == "capture.py — heimdall"
+        assert it["snippet"] is not None
+
+
+def test_search_snippet_comes_from_a11y(api_client: TestClient):
+    r = api_client.get("/search", params={"q": "debounce"})
+    snippet = r.json()["items"][0]["snippet"]
+    assert "**debounce**" in snippet
+    # and OCR-won hits still snippet from ocr_text
+    r2 = api_client.get("/search", params={"q": "rick"})
+    assert "**rick**" in r2.json()["items"][0]["snippet"]
 
 
 def test_frame_image_serves_jpeg(api_client: TestClient):

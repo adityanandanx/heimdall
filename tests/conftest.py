@@ -21,16 +21,22 @@ from heimdall.timeutil import day_bounds
 
 FIXTURE_DAY = "2026-08-02"
 
-# (offset_min, window_class, window_title, ocr_text, trigger)
+# (offset_min, window_class, window_title, ocr_text, trigger, a11y_text)
+# Mixed v2 source set: a11y-won frames (a11y_text set, ocr NULL), OCR-won
+# frames (ocr_text set, a11y NULL) and one keepalive frame with NULL text.
 FIXTURE_FRAMES = [
-    (0, "kitty", "zsh — htop", "terminal processes", "keepalive"),
-    (5, "code", "capture.py — heimdall", "event loop debounce and throttle", "activewindow"),
-    (20, "firefox", "LangGraph docs — checkpointers", "reading the checkpointers docs", "activewindow"),
-    (35, "firefox", "youtube.com/watch?v=dQw4w9WgXcQ", "never gonna give you up rick astley", "windowtitle"),
-    (50, "mpv", "Inception (2010)", "movie about dreams inside dreams", "activewindow"),
-    (65, "code", "leetcode.com/problems/two-sum", "hash map solution o of n", "activewindow"),
-    (80, "firefox", "linkedin.com/jobs", "staff engineer roles", "activewindow"),
-    (90, "kitty", "~ — terminal", "installing packages with pacman", "keepalive"),
+    (0, "kitty", "zsh — htop", None, "keepalive", None),
+    (5, "code", "capture.py — heimdall", None, "activewindow",
+     "event loop debounce and throttle\nAPScheduler cron daily recap"),
+    (20, "firefox", "LangGraph docs — checkpointers", None, "activewindow",
+     "checkpointers keep conversation state across calls\npersistent graph storage"),
+    (35, "firefox", "youtube.com/watch?v=dQw4w9WgXcQ", "never gonna give you up rick astley",
+     "windowtitle", None),
+    (50, "mpv", "Inception (2010)", "movie about dreams inside dreams", "activewindow", None),
+    (65, "code", "leetcode.com/problems/two-sum", None, "activewindow",
+     "hash map solution\nO(n) time complexity"),
+    (80, "firefox", "linkedin.com/jobs", "staff engineer roles", "activewindow", None),
+    (90, "kitty", "~ — terminal", "installing packages with pacman", "keepalive", None),
 ]
 
 
@@ -39,7 +45,7 @@ def build_day_db(db_path: Path, day: str = FIXTURE_DAY) -> Database:
     init_db(db_path)
     db = Database(db_path)
     start_ms, _ = day_bounds(day)
-    for i, (off, cls, title, ocr, trig) in enumerate(FIXTURE_FRAMES):
+    for i, (off, cls, title, ocr, trig, a11y) in enumerate(FIXTURE_FRAMES):
         rel = f"frames/2026/08/02/{i}.jpg"
         image = db_path.parent / rel
         image.parent.mkdir(parents=True, exist_ok=True)
@@ -55,7 +61,11 @@ def build_day_db(db_path: Path, day: str = FIXTURE_DAY) -> Database:
             "image_path": rel,
             "image_bytes": len(image.read_bytes()),
             "ocr_text": ocr,
-            "ocr_sec": 4.0,
+            "ocr_sec": 4.0 if ocr else None,
+            "a11y_text": a11y,
+            "a11y_json": ('[{"role": "document web", "name": "%s", "text": "", "children": []}]' % title)
+            if a11y else None,
+            "ocr_engine": None,
         })
     # sidra playing 00:00 -> 10:00 (exact music span = 10 min)
     db.insert_track(ts=start_ms + 0, player="sidra", artist="Tycho", title="Awake",

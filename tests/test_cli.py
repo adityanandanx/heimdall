@@ -79,6 +79,26 @@ def test_search_renders_lines(config_path, capsys):
     assert "2 result(s)" in out
 
 
+def test_search_renders_a11y_snippet(config_path, capsys):
+    """heimdall search surfaces a11y-derived hits with snippets (v2 #33)."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/search":
+            return httpx.Response(200, json={
+                "total": 1,
+                "items": [{
+                    "id": 1, "ts": "2026-08-02T10:30:00+05:30", "window_class": "code",
+                    "window_title": "capture.py — heimdall", "workspace": 2,
+                    "image_path": "frames/2026/08/02/1.jpg",
+                    "snippet": "event loop **debounce** and throttle", "score": -1.2,
+                }],
+            })
+        return httpx.Response(404, json={"detail": "not found"})
+
+    out = run_cli(["search", "debounce"], config_path, httpx.MockTransport(handler), capsys)
+    assert "capture.py — heimdall" in out
+    assert "event loop **debounce** and throttle" in out
+
+
 def test_search_json_flag(config_path, capsys):
     out = run_cli(["search", "youtube", "--json"], config_path, mock_api_transport(), capsys)
     body = json.loads(out)
