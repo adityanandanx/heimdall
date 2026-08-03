@@ -17,9 +17,9 @@ from heimdall.api.app import create_app
 from heimdall.capture.spans import track_playing_ms
 from heimdall.config import Config
 from heimdall.db import Database, init_db
-from heimdall.timeutil import day_bounds
+from heimdall.timeutil import day_bounds, today_str
 
-FIXTURE_DAY = "2026-08-02"
+FIXTURE_DAY = today_str()
 
 # (offset_min, window_class, window_title, ocr_text, trigger, a11y_text)
 # Mixed v2 source set: a11y-won frames (a11y_text set, ocr NULL), OCR-won
@@ -45,8 +45,9 @@ def build_day_db(db_path: Path, day: str = FIXTURE_DAY) -> Database:
     init_db(db_path)
     db = Database(db_path)
     start_ms, _ = day_bounds(day)
+    day_rel = day.replace("-", "/")
     for i, (off, cls, title, ocr, trig, a11y) in enumerate(FIXTURE_FRAMES):
-        rel = f"frames/2026/08/02/{i}.jpg"
+        rel = f"frames/{day_rel}/{i}.jpg"
         image = db_path.parent / rel
         image.parent.mkdir(parents=True, exist_ok=True)
         image.write_bytes(b"\xff\xd8\xff\xe0" + f"fixture{i}".encode())
@@ -108,7 +109,7 @@ def mock_llm_response(completions) -> httpx.MockTransport:
 
 
 RECAP_COMPLETION = {
-    "date": "2026-08-02",
+    "date": FIXTURE_DAY,
     "summary": "A focused day of building heimdall and watching a movie.",
     "accomplishments": ["Finished the event loop", "Shipped the FTS5 schema"],
     "unfinished": ["Two Sum still half-done", "Job applications in progress"],

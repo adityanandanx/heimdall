@@ -170,7 +170,7 @@ def test_recap_pipe_reports_parse_span_and_db_queries(tmp_path, monkeypatch):
                       llm=llm, gate=gate)
     assert gate.meta.get("db_queries", 0) >= 1
     assert any(e[0] == "span" and e[1]["name"] == "parse-recap" for e in gate.events)
-    assert result["output_path"].endswith("day-recap-2026-08-02.md")
+    assert result["output_path"].endswith(f"day-recap-{FIXTURE_DAY}.md")
 
 
 def test_llm_complete_wraps_in_generation_span():
