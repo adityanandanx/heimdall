@@ -500,6 +500,18 @@ class Database:
             )
             conn.commit()
 
+    def update_live_media(self, row_id: int, *, media_source, media_id) -> None:
+        """Attach CDP-resolved URL/video id to an open session's row (#36).
+
+        Only live rows; the FTS update triggers keep search in sync."""
+        with self._lock, self.conn() as conn:
+            conn.execute(
+                "UPDATE watch_sessions SET media_source = ?, media_id = ?"
+                " WHERE id = ? AND live = 1",
+                (media_source, media_id, row_id),
+            )
+            conn.commit()
+
     def finalize_live_session(self, row_id: int, *, ts_end: int, pos_end: int,
                               ranges: list) -> None:
         """Close an in-progress row in place: live=0 with the final values."""

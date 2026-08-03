@@ -193,3 +193,43 @@ def test_update_live_session_only_touches_live_rows(tmp_path):
     item = db.get_watch_session(finished_id)
     assert item["ts_end"] != 999
     assert item["live"] == 0
+
+
+def test_update_live_media_attaches_cdp_resolution(tmp_path):
+    """CDP-resolved URL/video id lands on the open live row (#36), and only on
+    live rows."""
+    db = Database(tmp_path / "db.sqlite")
+    init_db(db.path)
+    live_id = db.insert_live_session(
+        "chromium", "Rick Astley - Never Gonna Give You Up (Official Video) - YouTube",
+        None, None, ts_start=1_000, pos_start=900_000_000, length=7_200_000_000,
+        ranges=[],
+    )
+
+    db.update_live_media(
+        live_id,
+        media_source="https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+        media_id="dQw4w9WgXcQ",
+    )
+    item = db.get_watch_session(live_id)
+    assert item["media_source"] == "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+    assert item["media_id"] == "dQw4w9WgXcQ"
+    assert item["live"] == 1
+
+    total, hits = db.search_watch_sessions("youtube")
+    assert total == 1  # the FTS trigger follows the media columns
+    assert hits[0]["id"] == live_id
+
+    from heimdall.capture.sessions import SessionTracker
+
+    t = SessionTracker()
+    t.play("vlc", title="Inception (2010)", source=None,
+           position_us=600_000_000, wall_ms=1_000)
+    closed_id = db.insert_watch_session(
+        t.stop("vlc", position_us=900_000_000, wall_ms=130_000))
+    db.update_live_media(
+        closed_id,
+        media_source="https://example.com/video",
+        media_id=None,
+    )
+    assert db.get_watch_session(closed_id)["media_source"] is None

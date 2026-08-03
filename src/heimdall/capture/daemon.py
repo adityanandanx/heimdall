@@ -27,7 +27,7 @@ from heimdall.capture.a11y import content_bearing, flatten_text
 from heimdall.capture.events import activewindow_signature, classify_trigger, is_duplicate, is_track_change, parse_socket2_line, should_capture, workspace_id
 from heimdall.capture.ocr import route_extraction
 from heimdall.capture.phash import phash
-from heimdall.capture.sessions import SessionTracker, WatchSession, parse_mpris_line
+from heimdall.capture.sessions import SessionTracker, WatchSession, normalize_player, parse_mpris_line
 from heimdall.config import Config, load_config
 from heimdall.db import Database, init_db
 
@@ -50,6 +50,7 @@ class CaptureTools:
     playerctl_follow: Callable[[], Iterable[str]] = field(default=None)
     list_players: Callable[[], list[str]] = field(default=None)
     playerctl_position: Callable[[str], Optional[int]] = field(default=None)
+    cdp_resolve: Callable[[str, Optional[int]], Optional[dict]] = field(default=None)
 
     def __post_init__(self):
         if self.grim is None:
@@ -66,6 +67,8 @@ class CaptureTools:
             self.list_players = self._list_players
         if self.playerctl_position is None:
             self.playerctl_position = self._playerctl_position
+        if self.cdp_resolve is None:
+            self.cdp_resolve = self._cdp_resolve
 
     def find_socket(self) -> str:
         for inst in os.listdir(self.socket_dir):
@@ -137,6 +140,15 @@ class CaptureTools:
             return int(r.stdout.strip())
         except ValueError:
             return None
+
+    @staticmethod
+    def _cdp_resolve(window_title: str, position_us: Optional[int]) -> Optional[dict]:
+        """Resolve {media_source, media_id} for a Chromium page via CDP (#36)."""
+        from heimdall.capture import cdp
+
+        return cdp.resolve_chromium_media(
+            window_title=window_title, position_us=position_us,
+        )
 
     def socket_lines(self, should_stop: Callable[[], bool]) -> Iterable[str]:
         """Blocking generator of complete socket2 event lines.
@@ -364,7 +376,39 @@ class CaptureDaemon:
             if position_us is None:
                 continue
             self._persist_session(self.tracker.poll(player, position_us, now_ms))
+        self._enrich_chromium_media()
         self._sync_live_rows(now_ms)
+
+    def _enrich_chromium_media(self) -> None:
+        """CDP-resolve missing media for open Chromium sessions (#36).
+
+        Runs on each poll tick: reads the exact URL + video id from the DevTools
+        endpoint and writes them into the tracker and live row. Fail-soft — any
+        CDP failure leaves the session title-only.
+        """
+        resolve = getattr(self.tools, "cdp_resolve", None)
+        if resolve is None:
+            return
+        for snap in self.tracker.snapshot():
+            if normalize_player(snap.player) != "chromium" or snap.media_source:
+                continue
+            try:
+                resolved = resolve(snap.media_title or "", snap.last_pos_us)
+            except Exception:  # noqa: BLE001
+                log.warning("cdp resolution failed for %s", snap.player)
+                continue
+            if not resolved or not resolved.get("media_source"):
+                continue
+            self.tracker.set_media(
+                snap.player, resolved["media_source"], resolved.get("media_id"),
+            )
+            row_id = self._live_rows.get(snap.player)
+            if row_id is not None:
+                self.db.update_live_media(
+                    row_id,
+                    media_source=resolved["media_source"],
+                    media_id=resolved.get("media_id"),
+                )
 
     def _persist_session(self, closed: Optional[WatchSession]) -> None:
         if closed is None:

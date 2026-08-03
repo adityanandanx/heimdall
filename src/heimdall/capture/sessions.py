@@ -193,6 +193,22 @@ class SessionTracker:
         pos_end is 0 and the last known position closes the final range."""
         return self._close(player, None, wall_ms)
 
+    def set_media(self, player: str, media_source: Optional[str],
+                  media_id: Optional[str] = None) -> None:
+        """Attach CDP-resolved media fields to the open session (#36).
+
+        The poll loop enriches a live Chromium session once the exact URL and
+        video id are known; the closed WatchSession then carries them into
+        persistence.
+        """
+        op = self._open.get(player)
+        if op is None:
+            return
+        if media_source:
+            op.media_source = media_source
+        if media_id:
+            op.media_id = media_id
+
     def open_sessions(self) -> list[str]:
         """Players with an open session (the poll loop iterates these)."""
         return list(self._open)
