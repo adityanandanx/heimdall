@@ -89,6 +89,12 @@ class Config:
         return self.data_path / "frames"
 
     @property
+    def captions_path(self) -> Path:
+        """Caption content cache, keyed by media_id (#38) — signed URLs expire,
+        so the content is cached, never the URLs."""
+        return self.data_path / "captions"
+
+    @property
     def window_class_category(self) -> dict:
         return self.rules.get("window_class_category", {}) if self.rules else {}
 

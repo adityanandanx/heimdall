@@ -45,30 +45,31 @@ CREATE TRIGGER IF NOT EXISTS frames_au AFTER UPDATE ON frames BEGIN
 END;
 """
 
-# FTS over watch_sessions title/source (v2 #35) — a brand-new table on every DB,
-# so it is created idempotently with SCHEMA and never needs a migration rebuild.
+# FTS over watch_sessions title/source/transcript (v2 #35/#38) — a brand-new
+# table on every fresh DB, created idempotently with SCHEMA. Existing DBs get
+# the transcript column via a drop/recreate rebuild in _migrate_v2.
 WATCH_FTS_SCHEMA = """
 CREATE VIRTUAL TABLE IF NOT EXISTS watch_sessions_fts USING fts5(
-    media_title, media_source,
+    media_title, media_source, transcript,
     content='watch_sessions', content_rowid='id',
     tokenize='porter unicode61'
 );
 
 CREATE TRIGGER IF NOT EXISTS watch_sessions_ai AFTER INSERT ON watch_sessions BEGIN
-    INSERT INTO watch_sessions_fts(rowid, media_title, media_source)
-    VALUES (new.id, new.media_title, new.media_source);
+    INSERT INTO watch_sessions_fts(rowid, media_title, media_source, transcript)
+    VALUES (new.id, new.media_title, new.media_source, new.transcript);
 END;
 
 CREATE TRIGGER IF NOT EXISTS watch_sessions_ad AFTER DELETE ON watch_sessions BEGIN
-    INSERT INTO watch_sessions_fts(watch_sessions_fts, rowid, media_title, media_source)
-    VALUES ('delete', old.id, old.media_title, old.media_source);
+    INSERT INTO watch_sessions_fts(watch_sessions_fts, rowid, media_title, media_source, transcript)
+    VALUES ('delete', old.id, old.media_title, old.media_source, old.transcript);
 END;
 
 CREATE TRIGGER IF NOT EXISTS watch_sessions_au AFTER UPDATE ON watch_sessions BEGIN
-    INSERT INTO watch_sessions_fts(watch_sessions_fts, rowid, media_title, media_source)
-    VALUES ('delete', old.id, old.media_title, old.media_source);
-    INSERT INTO watch_sessions_fts(rowid, media_title, media_source)
-    VALUES (new.id, new.media_title, new.media_source);
+    INSERT INTO watch_sessions_fts(watch_sessions_fts, rowid, media_title, media_source, transcript)
+    VALUES ('delete', old.id, old.media_title, old.media_source, old.transcript);
+    INSERT INTO watch_sessions_fts(rowid, media_title, media_source, transcript)
+    VALUES (new.id, new.media_title, new.media_source, new.transcript);
 END;
 """
 
@@ -117,7 +118,9 @@ CREATE TABLE IF NOT EXISTS watch_sessions (
     pos_end INTEGER NOT NULL,
     length INTEGER NOT NULL,          -- video length in microseconds
     ranges TEXT NOT NULL,             -- JSON [[start_us, end_us], ...]; skipped segments excluded
-    live INTEGER NOT NULL DEFAULT 0   -- 1 while the session is in progress
+    live INTEGER NOT NULL DEFAULT 0,  -- 1 while the session is in progress
+    cues_json TEXT,                   -- sliced caption cues JSON, attached at close (#38)
+    transcript TEXT                   -- denormalized plain text, FTS-indexed (#38)
 );
 
 CREATE INDEX IF NOT EXISTS idx_frames_ts ON frames(ts);
@@ -146,6 +149,7 @@ SEARCH_COLS = ("id", "ts", "window_class", "window_title", "workspace", "image_p
 SESSION_COLS = (
     "id", "player", "media_title", "media_source", "media_id",
     "ts_start", "ts_end", "pos_start", "pos_end", "length", "ranges", "live",
+    "cues_json", "transcript",
 )
 
 
@@ -187,6 +191,21 @@ def _migrate_v2(conn: sqlite3.Connection) -> None:
     ws_cols = {r[1] for r in conn.execute("PRAGMA table_info(watch_sessions)")}
     if "live" not in ws_cols:
         conn.execute("ALTER TABLE watch_sessions ADD COLUMN live INTEGER NOT NULL DEFAULT 0")
+    for col in ("cues_json", "transcript"):
+        if col not in ws_cols:
+            conn.execute(f"ALTER TABLE watch_sessions ADD COLUMN {col} TEXT")
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='watch_sessions_fts'"
+    ).fetchone()
+    if row and "transcript" not in (row[0] or ""):
+        # External-content FTS cannot add a column in place — rebuild with the
+        # #38 transcript column and repopulate.
+        conn.execute("DROP TRIGGER IF EXISTS watch_sessions_ai")
+        conn.execute("DROP TRIGGER IF EXISTS watch_sessions_ad")
+        conn.execute("DROP TRIGGER IF EXISTS watch_sessions_au")
+        conn.execute("DROP TABLE IF EXISTS watch_sessions_fts")
+        conn.executescript(WATCH_FTS_SCHEMA)
+        conn.execute("INSERT INTO watch_sessions_fts(watch_sessions_fts) VALUES('rebuild')")
     need_frames_rebuild = bool(info["ocr_text"][3])  # notnull flag
     row = conn.execute(
         "SELECT sql FROM sqlite_master WHERE type='table' AND name='frames_fts'"
@@ -557,6 +576,20 @@ class Database:
             )
             conn.commit()
 
+    def update_session_transcript(self, row_id: int, *, cues_json: str,
+                                  transcript: str) -> None:
+        """Attach sliced captions to a closed session row (#38).
+
+        Runs after the row is persisted (live-finalized or freshly inserted);
+        the FTS update trigger keeps transcript search in sync."""
+        with self._lock, self.conn() as conn:
+            conn.execute(
+                "UPDATE watch_sessions SET cues_json = ?, transcript = ?"
+                " WHERE id = ?",
+                (cues_json, transcript, row_id),
+            )
+            conn.commit()
+
     def list_watch_sessions(self, *, player: str | None = None, start: int | None = None,
                             end: int | None = None, limit: int = 20,
                             offset: int = 0) -> tuple[int, list[dict]]:
@@ -596,9 +629,9 @@ class Database:
                               start: int | None = None, end: int | None = None,
                               limit: int = 20, offset: int = 0,
                               order: str = "score") -> tuple[int, list[dict]]:
-        """FTS5 over watch_sessions title/source — the #41 merged-search seam.
+        """FTS5 over watch_sessions title/source/transcript — the #41 merged-search seam.
 
-        bm25 weights: title 2.0, source 1.0 (titles are cleaner identifiers).
+        bm25 weights: title 2.0, source 1.0, transcript 0.5 (long ASR text).
         `order="ts"` sorts by ts_start newest-first instead of by bm25 score
         (the #37 merged-search timeline). Raises sqlite3.OperationalError on an
         invalid FTS5 MATCH.
@@ -619,9 +652,11 @@ class Database:
         sql = (
             "SELECT s.id, s.player, s.media_title, s.media_source, s.ts_start, s.ts_end,"
             " s.pos_start, s.pos_end, s.length, s.ranges, s.live,"
+            " s.cues_json, s.transcript,"
             " COALESCE(snippet(watch_sessions_fts, 0, '**', '**', ' … ', 14),"
+            "          snippet(watch_sessions_fts, 2, '**', '**', ' … ', 14),"
             "          snippet(watch_sessions_fts, 1, '**', '**', ' … ', 14)) AS snippet,"
-            " bm25(watch_sessions_fts, 2.0, 1.0) AS score"
+            " bm25(watch_sessions_fts, 2.0, 1.0, 0.5) AS score"
             " FROM watch_sessions_fts JOIN watch_sessions s ON s.id = watch_sessions_fts.rowid"
             f" WHERE {' AND '.join(where)} ORDER BY {order_by}"
             " LIMIT ? OFFSET ?"

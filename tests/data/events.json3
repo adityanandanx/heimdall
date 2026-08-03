@@ -1,0 +1,13 @@
+{
+  "events": [
+    {"tStartMs": 0, "dDurationMs": 1680, "segs": [{"utf8": "Never gonna give you up"}]},
+    {"tStartMs": 1680, "dDurationMs": 1730, "segs": [{"utf8": "Never gonna let you down"}]},
+    {"tStartMs": 3410, "dDurationMs": 800, "segs": [{"utf8": "Never gonna run around"}]},
+    {"tStartMs": 4210, "dDurationMs": 990, "segs": [{"utf8": "and desert you"}]},
+    {"tStartMs": 5200, "dDurationMs": 1400, "segs": [{"utf8": "Never gonna make you cry"}]},
+    {"tStartMs": 6600, "dDurationMs": 1500, "segs": [{"utf8": "Never gonna say goodbye"}]},
+    {"tStartMs": 8100, "dDurationMs": 1200, "segs": [{"utf8": "Never gonna tell a lie"}]},
+    {"tStartMs": 9300, "dDurationMs": 1000, "segs": [{"utf8": "and hurt you"}]},
+    {"tStartMs": 10300, "dDurationMs": 1900, "segs": [{"utf8": "We've known each other"}]}
+  ]
+}

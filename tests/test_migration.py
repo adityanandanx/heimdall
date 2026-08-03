@@ -201,6 +201,76 @@ def test_v2_migration_adds_live_column_to_existing_watch_sessions(tmp_path):
     assert ts_end == 2000
 
 
+def test_migration_adds_transcript_and_rebuilds_watch_fts(tmp_path):
+    """Pre-#38 watch_sessions (live column, but no cues_json/transcript and a
+    3-column watch_sessions_fts) gains the columns and an FTS rebuild that
+    keeps existing rows searchable."""
+    path = tmp_path / "pretranscript.db"
+    conn = sqlite3.connect(path)
+    conn.executescript("""
+        CREATE TABLE watch_sessions (
+            id INTEGER PRIMARY KEY,
+            player TEXT NOT NULL,
+            media_title TEXT,
+            media_source TEXT,
+            media_id TEXT,
+            ts_start INTEGER NOT NULL,
+            ts_end INTEGER NOT NULL,
+            pos_start INTEGER NOT NULL,
+            pos_end INTEGER NOT NULL,
+            length INTEGER NOT NULL,
+            ranges TEXT NOT NULL,
+            live INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE VIRTUAL TABLE watch_sessions_fts USING fts5(
+            media_title, media_source,
+            content='watch_sessions', content_rowid='id',
+            tokenize='porter unicode61'
+        );
+        CREATE TRIGGER watch_sessions_ai AFTER INSERT ON watch_sessions BEGIN
+            INSERT INTO watch_sessions_fts(rowid, media_title, media_source)
+            VALUES (new.id, new.media_title, new.media_source);
+        END;
+        CREATE TRIGGER watch_sessions_ad AFTER DELETE ON watch_sessions BEGIN
+            INSERT INTO watch_sessions_fts(watch_sessions_fts, rowid, media_title, media_source)
+            VALUES ('delete', old.id, old.media_title, old.media_source);
+        END;
+        CREATE TRIGGER watch_sessions_au AFTER UPDATE ON watch_sessions BEGIN
+            INSERT INTO watch_sessions_fts(watch_sessions_fts, rowid, media_title, media_source)
+            VALUES ('delete', old.id, old.media_title, old.media_source);
+            INSERT INTO watch_sessions_fts(rowid, media_title, media_source)
+            VALUES (new.id, new.media_title, new.media_source);
+        END;
+        INSERT INTO watch_sessions (player, media_title, media_source, media_id,
+            ts_start, ts_end, pos_start, pos_end, length, ranges, live)
+        VALUES ('chromium.instance1', 'Rick Astley - Never Gonna Give You Up',
+                'https://youtube.com/watch?v=dQw4w9WgXcQ', 'dQw4w9WgXcQ',
+                1000, 2000, 0, 5000000, 213000000, '[[0,5000000]]', 0);
+    """)
+    conn.commit()
+    conn.close()
+
+    init_db(path)
+
+    cols = _columns(path, "watch_sessions")
+    assert cols["cues_json"] == "TEXT"
+    assert cols["transcript"] == "TEXT"
+    conn = sqlite3.connect(path)
+    watch_fts = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE name='watch_sessions_fts'").fetchone()[0]
+    conn.close()
+    assert "transcript" in watch_fts
+
+    db = Database(path)
+    row_id = db.list_watch_sessions()[1][0]["id"]
+    db.update_session_transcript(row_id, cues_json="[]",
+                                 transcript="never gonna give you up")
+    total, items = db.search_watch_sessions("gonna give you up")
+    assert total == 1
+    assert items[0]["id"] == row_id
+    init_db(path)  # idempotent: second startup is a no-op
+
+
 def test_migration_relaxes_legacy_ocr_text_not_null(tmp_path):
     """Live v1 DBs with ocr_text NOT NULL accept a11y-blind NULL inserts."""
     path = tmp_path / "legacy.db"

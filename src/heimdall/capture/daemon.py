@@ -52,9 +52,12 @@ class CaptureTools:
     playerctl_position: Callable[[str], Optional[int]] = field(default=None)
     cdp_resolve: Callable[[str, Optional[int]], Optional[dict]] = field(default=None)
     media_resolver: str = "extension"  # extension|cdp: Chromium URL source of truth (#44)
+    transcript_fetch: Callable[[str, list], Optional[dict]] = field(default=None)
+    captions_dir: Path = field(default=None, repr=False)
     db: object = field(default=None, repr=False)
     _cdp_session: object = field(default=None, init=False, repr=False)
     _ext_resolver: object = field(default=None, init=False, repr=False)
+    _caption_cache: object = field(default=None, init=False, repr=False)
 
     def __post_init__(self):
         if self.grim is None:
@@ -76,6 +79,8 @@ class CaptureTools:
                 self.cdp_resolve = self._cdp_resolve
             else:
                 self.cdp_resolve = self._extension_resolve
+        if self.transcript_fetch is None:
+            self.transcript_fetch = self._transcript_fetch
 
     def find_socket(self) -> str:
         for inst in os.listdir(self.socket_dir):
@@ -179,6 +184,27 @@ class CaptureTools:
             self._ext_resolver = ExtensionResolver(self.db)
         return self._ext_resolver.resolve(window_title, position_us)
 
+    def _transcript_fetch(self, media_id: str, ranges: list) -> Optional[dict]:
+        """Sliced captions for one closed session: {cues_json, transcript}.
+
+        Fetches once per media_id (cached on disk under `captions_dir`) and
+        slices to the merged watched span of `ranges`. Any failure — network,
+        age-gate, removed, still-live, no track — returns None so the session
+        stays title-only.
+        """
+        from heimdall.capture.captions import (CaptionCache, cues_json,
+                                               cues_to_text, watched_span_us)
+
+        if self._caption_cache is None:
+            self._caption_cache = CaptionCache(self.captions_dir)
+        span = watched_span_us(ranges)
+        if span is None:
+            return None
+        cues = self._caption_cache.slice_to(media_id, span[0], span[1])
+        if not cues:
+            return None
+        return {"cues_json": cues_json(cues), "transcript": cues_to_text(cues)}
+
     def socket_lines(self, should_stop: Callable[[], bool]) -> Iterable[str]:
         """Blocking generator of complete socket2 event lines.
 
@@ -233,7 +259,11 @@ class CaptureDaemon:
         self.db_path = Path(db_path) if db_path else data / "data.db"
         self.db = Database(self.db_path)
         if tools is None:
-            tools = CaptureTools(media_resolver=config.watch.media_resolver, db=self.db)
+            tools = CaptureTools(
+                media_resolver=config.watch.media_resolver,
+                captions_dir=config.captions_path,
+                db=self.db,
+            )
         self.tools = tools
         self.heartbeat = data / "capture.heartbeat"
         self.data = data
@@ -453,7 +483,36 @@ class CaptureDaemon:
                 ranges=closed.ranges,
             )
         else:
-            self.db.insert_watch_session(closed)
+            row_id = self.db.insert_watch_session(closed)
+        self._attach_transcript(closed, row_id)
+
+    def _attach_transcript(self, closed: WatchSession, row_id: int) -> None:
+        """Attach sliced captions to a closed chromium session (#38).
+
+        Fires only when the session has a resolvable YouTube media_id; every
+        failure path returns None from `transcript_fetch` so the row stays
+        title-only. Wrapped in try/except as the daemon's final say.
+        """
+        resolve = getattr(self.tools, "transcript_fetch", None)
+        if resolve is None or not closed.media_id:
+            return
+        if normalize_player(closed.player) != "chromium":
+            return
+        try:
+            result = resolve(closed.media_id, closed.ranges)
+        except Exception:  # noqa: BLE001 — capture must never fail a session
+            log.warning("transcript attach failed for %s", closed.media_id)
+            return
+        if not result:
+            return
+        try:
+            self.db.update_session_transcript(
+                row_id,
+                cues_json=result["cues_json"],
+                transcript=result["transcript"],
+            )
+        except Exception:  # noqa: BLE001
+            log.warning("transcript persist failed for %s", closed.media_id)
 
     def _capture_worker(self) -> None:
         while True:
