@@ -51,6 +51,22 @@ def mock_api_transport() -> httpx.MockTransport:
                 "tracing": {"enabled": False, "reason": "LANGFUSE_* env vars unset"},
                 "pipes": {"last_runs": {"day-recap": None, "time-breakdown": "2026-08-02T23:05:00+05:30"}},
             })
+        if path == "/sessions":
+            return httpx.Response(200, json={
+                "total": 2,
+                "items": [
+                    {"id": 2, "player": "vlc", "media_title": "Inception (2010)",
+                     "media_source": "file:///mnt/movies/Inception.mkv", "media_id": None,
+                     "ts_start": "2026-08-02T21:00:00+05:30", "ts_end": "2026-08-02T21:30:00+05:30",
+                     "pos_start": 600_000_000, "pos_end": 900_000_000, "length": 7_200_000_000,
+                     "ranges": [[600_000_000, 900_000_000]]},
+                    {"id": 1, "player": "chromium.instance1", "media_title": "Rick Astley - Never Gonna Give You Up",
+                     "media_source": None, "media_id": None,
+                     "ts_start": "2026-08-02T19:00:00+05:30", "ts_end": "2026-08-02T19:10:00+05:30",
+                     "pos_start": 0, "pos_end": 60_000_000, "length": 213_000_000,
+                     "ranges": [[0, 60_000_000]]},
+                ],
+            })
         return httpx.Response(404, json={"detail": "not found"})
 
     return httpx.MockTransport(handler)
@@ -144,6 +160,23 @@ def test_breakdown_multi_day_merges_locally(config_path, capsys):
     assert merged.exists()
     assert "merged 2 days" in out
     assert "| Music | 30 |" in merged.read_text()
+
+
+def test_sessions_renders(config_path, capsys):
+    """heimdall sessions renders watched ranges as video-time (v2 #35)."""
+    out = run_cli(["sessions"], config_path, mock_api_transport(), capsys)
+    assert "Inception (2010)" in out
+    assert "file:///mnt/movies/Inception.mkv" in out
+    assert "10:00-15:00" in out  # fmt_video_time(600M) -> 10:00, (900M) -> 15:00
+    assert "Rick Astley - Never Gonna Give You Up" in out
+    assert "2 session(s)" in out
+
+
+def test_sessions_json_flag(config_path, capsys):
+    out = run_cli(["sessions", "--json"], config_path, mock_api_transport(), capsys)
+    body = json.loads(out)
+    assert set(body) == {"total", "items"}
+    assert body["total"] == 2
 
 
 def test_api_error_exits_nonzero(config_path, capsys):

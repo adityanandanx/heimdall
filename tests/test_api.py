@@ -243,6 +243,85 @@ def test_run_breakdown_pipe(api_client: TestClient):
     assert "Music" in body["output_markdown"]
 
 
+# ---- /sessions ----
+
+def _insert_session(db, *, player="vlc", wall_ms=1_000, pos=600_000_000,
+                    title="Inception (2010)", source="file:///mnt/movies/Inception.mkv"):
+    from heimdall.capture.sessions import SessionTracker
+
+    t = SessionTracker()
+    t.play(player, title=title, source=source, position_us=pos,
+           length_us=7_200_000_000, wall_ms=wall_ms)
+    return db.insert_watch_session(t.stop(player, position_us=pos + 300_000_000,
+                                          wall_ms=wall_ms + 129_000))
+
+
+def test_sessions_list_shape(api_client: TestClient, db):
+    _insert_session(db)
+    r = api_client.get("/sessions")
+    assert r.status_code == 200
+    body = r.json()
+    assert set(body) == {"total", "items"}
+    assert body["total"] == 1
+    item = body["items"][0]
+    for key in ("id", "player", "media_title", "media_source", "media_id",
+                "ts_start", "ts_end", "pos_start", "pos_end", "length", "ranges"):
+        assert key in item
+    assert item["ranges"] == [[600_000_000, 900_000_000]]
+    assert item["media_source"] == "file:///mnt/movies/Inception.mkv"
+    assert datetime.fromisoformat(item["ts_start"]).tzinfo is not None
+    assert datetime.fromisoformat(item["ts_end"]).tzinfo is not None
+
+
+def test_sessions_newest_first(api_client: TestClient, db):
+    _insert_session(db, wall_ms=1_000)
+    _insert_session(db, player="sidra", wall_ms=200_000)
+    items = api_client.get("/sessions").json()["items"]
+    assert [it["player"] for it in items] == ["sidra", "vlc"]
+
+
+def test_sessions_detail_includes_ranges_and_404(api_client: TestClient, db):
+    _insert_session(db)
+    sid = api_client.get("/sessions").json()["items"][0]["id"]
+    r = api_client.get(f"/sessions/{sid}")
+    assert r.status_code == 200
+    detail = r.json()
+    assert detail["ranges"] == [[600_000_000, 900_000_000]]
+    assert detail["pos_start"] == 600_000_000
+    assert api_client.get("/sessions/999999").status_code == 404
+
+
+def test_sessions_filters_and_pagination(api_client: TestClient, db):
+    _insert_session(db, wall_ms=1_000)
+    _insert_session(db, player="sidra", wall_ms=200_000)
+    body = api_client.get("/sessions", params={"player": "vlc"}).json()
+    assert body["total"] == 1
+
+    start_iso = ts_to_iso(50_000)
+    body = api_client.get("/sessions", params={"start": start_iso}).json()
+    assert body["total"] == 1
+    assert body["items"][0]["player"] == "sidra"
+    end_iso = ts_to_iso(5_000)
+    body = api_client.get("/sessions", params={"end": end_iso}).json()
+    assert body["total"] == 1
+
+    body = api_client.get("/sessions", params={"limit": 1, "offset": 1}).json()
+    assert body["total"] == 2
+    assert len(body["items"]) == 1
+    assert api_client.get("/sessions", params={"limit": 0}).status_code == 422
+    assert api_client.get("/sessions", params={"start": "not-a-date"}).status_code == 422
+
+
+def test_sessions_preview_page(api_client: TestClient):
+    """The loopback preview renders GET /sessions live (user request 2026-08-03)."""
+    r = api_client.get("/")
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/html")
+    assert "watch sessions" in r.text
+    assert "auto-refresh" in r.text
+    assert "/sessions" in r.text
+
+
 # ---- /status ----
 
 def test_status(api_client: TestClient):

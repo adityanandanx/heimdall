@@ -16,6 +16,7 @@ import httpx
 import typer
 
 from heimdall.api.app import create_app
+from heimdall.capture.sessions import fmt_video_time
 from heimdall.config import Config, load_config
 from heimdall.pipes.merge import merge as merge_days
 from heimdall.timeutil import parse_day, today_str
@@ -201,6 +202,34 @@ def status(json_output: bool = typer.Option(False, "--json")) -> None:
     print(f"tracing: {'ON' if tr['enabled'] else 'off (' + tr['reason'] + ')'}")
     for name, ts in data["pipes"]["last_runs"].items():
         print(f"last {name}: {ts or 'never'}")
+
+
+@app.command("sessions")
+def sessions(
+    player: str = typer.Option(None, "--player"),
+    start: str = typer.Option(None, "--start"),
+    end: str = typer.Option(None, "--end"),
+    limit: int = typer.Option(10, "--limit"),
+    offset: int = typer.Option(0, "--offset"),
+    json_output: bool = typer.Option(False, "--json"),
+) -> None:
+    """List watch sessions (MPRIS video watching), newest first."""
+    data = _client(_cfg).get("/sessions", {
+        "player": player, "start": start, "end": end,
+        "limit": limit, "offset": offset,
+    })
+    if json_output:
+        print(json.dumps(data, ensure_ascii=False, indent=2))
+        return
+    for item in data["items"]:
+        ranges = ", ".join(
+            f"{fmt_video_time(a)}-{fmt_video_time(b)}" for a, b in item["ranges"]
+        ) or "—"
+        print(f"{item['ts_start']} | {item['player']} | {item['media_title']}")
+        if item["media_source"]:
+            print(f"  {item['media_source']}")
+        print(f"  watched {ranges} (wall {item['ts_start']} -> {item['ts_end']})")
+    print(f"{data['total']} session(s)")
 
 
 def main(argv: list[str] | None = None) -> None:

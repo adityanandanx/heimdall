@@ -145,6 +145,19 @@ def test_fresh_v2_db_needs_no_migration(tmp_path):
     assert "a11y_text" in _fts_ddl(path)
 
 
+def test_v1_migration_creates_watch_sessions_tables(tmp_path):
+    """v2 #35: the startup migration adds watch_sessions + FTS on v1 DBs too."""
+    path = tmp_path / "v1.db"
+    _make_v1_db(path)
+    init_db(path)
+    conn = sqlite3.connect(path)
+    names = {r[0] for r in conn.execute(
+        "SELECT name FROM sqlite_master WHERE name LIKE 'watch_sessions%'")}
+    conn.close()
+    assert "watch_sessions" in names
+    assert "watch_sessions_fts" in names
+
+
 def test_snippet_prefers_a11y_but_falls_back_to_ocr(db):
     """a11y-won frames snippet from a11y_text; ocr-won frames from ocr_text."""
     a11y_total, a11y_items = db.search("debounce")

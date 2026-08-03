@@ -1,12 +1,12 @@
 """Event-driven capture daemon.
 
 Threads: socket2 listener -> debouncer -> capture workers -> extraction
-workers, plus a keepalive timer, an MPRIS follower and a heartbeat.
-grim/hyprctl/playerctl/socket2 and the AT-SPI reader all sit behind
-`CaptureTools` so the rest is plain wiring.
+workers, plus a keepalive timer, an MPRIS follower, a watch-session poll loop
+and a heartbeat. grim/hyprctl/playerctl/socket2 and the AT-SPI reader all sit
+behind `CaptureTools` so the rest is plain wiring.
 
 Not unit-tested (the pure decision logic lives in events.py / spans.py /
-a11y.py).
+a11y.py / sessions.py).
 """
 
 from __future__ import annotations
@@ -25,6 +25,7 @@ from typing import Callable, Iterable, Optional
 
 from heimdall.capture.a11y import content_bearing, flatten_text
 from heimdall.capture.events import activewindow_signature, classify_trigger, is_duplicate, is_track_change, parse_socket2_line, should_capture, workspace_id
+from heimdall.capture.sessions import SessionTracker, WatchSession, parse_mpris_line
 from heimdall.config import Config, load_config
 from heimdall.db import Database, init_db
 
@@ -44,6 +45,8 @@ class CaptureTools:
     activewindow: Callable[[], Optional[dict]] = field(default=None)
     a11y_read: Callable[[str, str], Optional[list]] = field(default=None)
     playerctl_follow: Callable[[], Iterable[str]] = field(default=None)
+    list_players: Callable[[], list[str]] = field(default=None)
+    playerctl_position: Callable[[str], Optional[int]] = field(default=None)
 
     def __post_init__(self):
         if self.grim is None:
@@ -54,6 +57,10 @@ class CaptureTools:
             self.a11y_read = self._a11y_read
         if self.playerctl_follow is None:
             self.playerctl_follow = self._playerctl_follow
+        if self.list_players is None:
+            self.list_players = self._list_players
+        if self.playerctl_position is None:
+            self.playerctl_position = self._playerctl_position
 
     def find_socket(self) -> str:
         for inst in os.listdir(self.socket_dir):
@@ -90,13 +97,35 @@ class CaptureTools:
     @staticmethod
     def _playerctl_follow() -> Iterable[str]:
         cmd = ["playerctl", "metadata", "--follow", "--format",
-               "{{status}}|{{artist}}|{{title}}|{{album}}|{{playerName}}"]
+               "{{status}}|{{artist}}|{{title}}|{{album}}|{{playerName}}"
+               "|{{position}}|{{mpris:length}}|{{xesam:url}}"]
         p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
         try:
             for raw in p.stdout or []:
                 yield raw.strip()
         finally:
             p.wait()
+
+    @staticmethod
+    def _list_players() -> list[str]:
+        r = subprocess.run(["playerctl", "-l"], capture_output=True, text=True)
+        if r.returncode != 0:
+            return []
+        return [line.strip() for line in r.stdout.splitlines() if line.strip()]
+
+    @staticmethod
+    def _playerctl_position(player: str) -> Optional[int]:
+        """Position in video-time microseconds, or None when the player is gone."""
+        r = subprocess.run(
+            ["playerctl", "metadata", "-p", player, "--format", "{{position}}"],
+            capture_output=True, text=True,
+        )
+        if r.returncode != 0:
+            return None
+        try:
+            return int(r.stdout.strip())
+        except ValueError:
+            return None
 
     def socket_lines(self, should_stop: Callable[[], bool]) -> Iterable[str]:
         """Blocking generator of complete socket2 event lines.
@@ -150,6 +179,7 @@ class CaptureDaemon:
         self._last_sig: tuple | None = None
         self._last_track: tuple | None = None
         self._last_track_status: str | None = None
+        self.tracker = SessionTracker(pause_ends_session_s=config.watch.pause_ends_session_s)
         self.events_q: queue.Queue[str] = queue.Queue()
         self.jobs: queue.Queue[Job] = queue.Queue()
         self.extract_jobs: queue.Queue[ExtractJob] = queue.Queue()
@@ -235,6 +265,60 @@ class CaptureDaemon:
         self._last_track_status = status
         if status == "playing" and (changed or resumed):
             self.jobs.put(("mpris", now_ms))
+        self._update_watch_session(line, now_ms)
+
+    def _update_watch_session(self, line: str, now_ms: int) -> None:
+        """Drive the watch-session tracker from the follow line (#35).
+
+        playing opens (or resumes) a session — the tracker closes the old one
+        itself when the track changes; paused marks a streak boundary; stopped
+        closes. A stopped line carries position 0, so the session is ended at
+        the last known position (like a player exit).
+        """
+        parsed = parse_mpris_line(line)
+        if parsed is None:
+            return
+        player = parsed["player"]
+        if parsed["status"] == "playing":
+            closed = self.tracker.play(
+                player,
+                title=parsed["title"],
+                source=parsed["source"],
+                position_us=parsed["position_us"],
+                length_us=parsed["length_us"],
+                wall_ms=now_ms,
+            )
+            self._persist_session(closed)
+        elif parsed["status"] == "paused":
+            self.tracker.pause(player, parsed["position_us"], now_ms)
+        else:
+            closed = self.tracker.stop(player, parsed["position_us"], now_ms) if parsed["position_us"] > 0 else self.tracker.exit(player, now_ms)
+            self._persist_session(closed)
+
+    def _watch_poll(self) -> None:
+        """Poll open players every watch.poll_interval_s: refresh position (seek
+        detection + range end) and close sessions whose player disappeared."""
+        while not self._stop.wait(self.config.watch.poll_interval_s):
+            self._watch_poll_once()
+
+    def _watch_poll_once(self) -> None:
+        try:
+            players = set(self.tools.list_players())
+        except Exception:  # noqa: BLE001
+            players = None
+        now_ms = int(time.time() * 1000)
+        for player in list(self.tracker.open_sessions()):
+            if players is not None and player not in players:
+                self._persist_session(self.tracker.exit(player, now_ms))
+                continue
+            position_us = self.tools.playerctl_position(player)
+            if position_us is None:
+                continue
+            self._persist_session(self.tracker.poll(player, position_us, now_ms))
+
+    def _persist_session(self, closed: Optional[WatchSession]) -> None:
+        if closed is not None:
+            self.db.insert_watch_session(closed)
 
     def _capture_worker(self) -> None:
         while True:
@@ -339,6 +423,7 @@ class CaptureDaemon:
             threading.Thread(target=self._debouncer, name="debouncer", daemon=True),
             threading.Thread(target=self._keepalive, name="keepalive", daemon=True),
             threading.Thread(target=self._mpris, name="mpris", daemon=True),
+            threading.Thread(target=self._watch_poll, name="watch-poll", daemon=True),
             threading.Thread(target=self._heartbeat_loop, name="heartbeat", daemon=True),
         ]
         threads += [

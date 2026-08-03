@@ -2,14 +2,16 @@
 
 Local, screen-only memory for Hyprland. A capture daemon listens to Hyprland's
 event socket and on window changes grim's the active-window region to JPEG and
-OCRs it with tesseract into SQLite (FTS5 searchable). Music is captured via
-MPRIS. A FastAPI server (`127.0.0.1:3030`) serves search/frames and runs two
-**pipes** — a day recap and a time breakdown — through a local Gemma 4 QAT
-model on the Intel Arc Vulkan backend. Nothing leaves the machine.
+reads the window's a11y tree (AT-SPI) into SQLite (FTS5 searchable); tesseract
+is retired. Music and video are captured via MPRIS — video watch-sessions (VLC
+with exact file paths, Chromium title-only for now) become first-class, searchable
+memories. A FastAPI server (`127.0.0.1:3030`) serves search/frames/watch-sessions
+and runs two **pipes** — a day recap and a time breakdown — through a local
+Gemma 4 QAT model on the Intel Arc Vulkan backend. Nothing leaves the machine.
 
 ## Requirements
 
-- Arch + Hyprland, `grim`, `tesseract`, `playerctl`, `/usr/bin/llama-server`
+- Arch + Hyprland, `grim`, `playerctl`, `/usr/bin/llama-server`
 - Vulkan GPU for the model (`-ngl 99`); see `scripts/start-llama.sh`
 - `uv` for the dev/test toolchain
 
@@ -27,7 +29,7 @@ Entry point: `heimdall` (CLI), `heimdall serve` (API + scheduler).
 ```
 ~/.heimdall/
   config.yaml            # tunables (see below)
-  data.db                # SQLite (WAL): frames, tracks, events, frames_fts
+  data.db                # SQLite (WAL): frames, tracks, events, watch_sessions, *_fts
   capture.heartbeat      # mtime/ts written by the capture daemon
   frames/YYYY/MM/DD/     # JPEGs, one per capture
   output/                # day-recap-*.md, time-breakdown-*.md
@@ -41,6 +43,7 @@ data_dir: ~/.heimdall
 api: {bind: 127.0.0.1, port: 3030}
 llama_server: {base_url: http://127.0.0.1:8080, model: gemma-4-E2B-it-qat-q4_0}
 capture: {debounce_s: 1.5, min_interval_s: 10, keepalive_min: 5, extract_workers: 1}
+watch: {pause_ends_session_s: 60, poll_interval_s: 30}
 scheduler: {day_recap: "0 23 * * *", time_breakdown: "5 23 * * *"}
 rules: {window_class_category: {sidra: Music, mpv: Movies}}
 observability: {enabled: true}
@@ -60,6 +63,10 @@ heimdall serve                            # API + scheduler (23:00/23:05 pipes)
 heimdall status                           # down-detector
 ```
 
+Watch-session preview: `http://127.0.0.1:3030` (served by the API, loopback
+only) — a read-only, auto-refreshing list of watch-sessions (title, source,
+watched range, wall span, transcript when present).
+
 Autostart is opt-in (default OFF) — one `exec-once` per piece in `hyprland.conf`:
 
 ```
@@ -75,6 +82,7 @@ A crashed capture gaps data until noticed; scheduled pipes only run while
 
 ```sh
 heimdall search <q> [--window-class --start --end --limit --offset --json]
+heimdall sessions [--player --start --end --limit --offset --json]
 heimdall recap [today|yesterday|YYYY-MM-DD]
 heimdall breakdown [day] [--days N] [--json]
 heimdall status [--json]
@@ -103,7 +111,7 @@ LLM pass) into `output/time-breakdown-{endday}-{N}d.md`.
 uv run pytest tests/ -q
 ```
 
-Seams tested: HTTP API (FTS search/ranking, frames, pipe-run contract),
-pipe parse/render + deterministic merge, capture event/span math. The real
-llama-server/Vulkan path and tesseract accuracy are verified via the checklist
-above, not unit tests.
+Seams tested: HTTP API (FTS search/ranking, frames, pipes, watch-sessions),
+pipe parse/render + deterministic merge, capture event/span math, the MPRIS
+watch-session state machine. The real llama-server/Vulkan path and OCR
+accuracy are verified via the checklist above, not unit tests.

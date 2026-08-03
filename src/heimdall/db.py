@@ -7,12 +7,15 @@ UTC epoch ms. Images live on disk under the data dir, not in the DB.
 
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 import threading
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterable
+
+from heimdall.capture.sessions import WatchSession
 
 # The FTS table + sync triggers alone, so the v2 migration can drop/recreate
 # them against an existing v1 frames table after the ALTER TABLE. SCHEMA
@@ -39,6 +42,33 @@ CREATE TRIGGER IF NOT EXISTS frames_au AFTER UPDATE ON frames BEGIN
     VALUES ('delete', old.id, old.a11y_text, old.ocr_text, old.window_title, old.window_class);
     INSERT INTO frames_fts(rowid, a11y_text, ocr_text, window_title, window_class)
     VALUES (new.id, new.a11y_text, new.ocr_text, new.window_title, new.window_class);
+END;
+"""
+
+# FTS over watch_sessions title/source (v2 #35) — a brand-new table on every DB,
+# so it is created idempotently with SCHEMA and never needs a migration rebuild.
+WATCH_FTS_SCHEMA = """
+CREATE VIRTUAL TABLE IF NOT EXISTS watch_sessions_fts USING fts5(
+    media_title, media_source,
+    content='watch_sessions', content_rowid='id',
+    tokenize='porter unicode61'
+);
+
+CREATE TRIGGER IF NOT EXISTS watch_sessions_ai AFTER INSERT ON watch_sessions BEGIN
+    INSERT INTO watch_sessions_fts(rowid, media_title, media_source)
+    VALUES (new.id, new.media_title, new.media_source);
+END;
+
+CREATE TRIGGER IF NOT EXISTS watch_sessions_ad AFTER DELETE ON watch_sessions BEGIN
+    INSERT INTO watch_sessions_fts(watch_sessions_fts, rowid, media_title, media_source)
+    VALUES ('delete', old.id, old.media_title, old.media_source);
+END;
+
+CREATE TRIGGER IF NOT EXISTS watch_sessions_au AFTER UPDATE ON watch_sessions BEGIN
+    INSERT INTO watch_sessions_fts(watch_sessions_fts, rowid, media_title, media_source)
+    VALUES ('delete', old.id, old.media_title, old.media_source);
+    INSERT INTO watch_sessions_fts(rowid, media_title, media_source)
+    VALUES (new.id, new.media_title, new.media_source);
 END;
 """
 
@@ -75,11 +105,27 @@ CREATE TABLE IF NOT EXISTS events (
     raw TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS watch_sessions (
+    id INTEGER PRIMARY KEY,
+    player TEXT NOT NULL,             -- raw MPRIS player (vlc, chromium.instance1)
+    media_title TEXT,                 -- track title; Chromium title-only until CDP (#36)
+    media_source TEXT,                -- xesam:url (VLC exact file path), None for Chromium
+    media_id TEXT,                    -- NULL until the CDP player (#36)
+    ts_start INTEGER NOT NULL,        -- UTC epoch ms; wall span excludes pauses
+    ts_end INTEGER NOT NULL,
+    pos_start INTEGER NOT NULL,       -- video-time microseconds
+    pos_end INTEGER NOT NULL,
+    length INTEGER NOT NULL,          -- video length in microseconds
+    ranges TEXT NOT NULL              -- JSON [[start_us, end_us], ...]; skipped segments excluded
+);
+
 CREATE INDEX IF NOT EXISTS idx_frames_ts ON frames(ts);
 CREATE INDEX IF NOT EXISTS idx_frames_class_ts ON frames(window_class, ts);
 CREATE INDEX IF NOT EXISTS idx_frames_trigger ON frames(trigger);
 CREATE INDEX IF NOT EXISTS idx_tracks_ts ON tracks(ts);
-""" + FTS_SCHEMA
+CREATE INDEX IF NOT EXISTS idx_watch_sessions_ts_start ON watch_sessions(ts_start);
+CREATE INDEX IF NOT EXISTS idx_watch_sessions_player ON watch_sessions(player);
+""" + FTS_SCHEMA + WATCH_FTS_SCHEMA
 
 FRAME_COLS = (
     "id", "ts", "monitor", "workspace", "window_class", "window_title",
@@ -88,6 +134,11 @@ FRAME_COLS = (
 )
 
 SEARCH_COLS = ("id", "ts", "window_class", "window_title", "workspace", "image_path", "snippet", "score")
+
+SESSION_COLS = (
+    "id", "player", "media_title", "media_source", "media_id",
+    "ts_start", "ts_end", "pos_start", "pos_end", "length", "ranges",
+)
 
 
 def connect(path: str | os.PathLike) -> sqlite3.Connection:
@@ -351,3 +402,95 @@ class Database:
         with self._lock, self.conn() as conn:
             conn.execute("INSERT OR IGNORE INTO events (ts, raw) VALUES (?, ?)", (ts, raw))
             conn.commit()
+
+    # ---- watch sessions ----
+
+    def insert_watch_session(self, session: WatchSession) -> int:
+        with self._lock, self.conn() as conn:
+            cur = conn.execute(
+                "INSERT INTO watch_sessions (player, media_title, media_source, media_id,"
+                " ts_start, ts_end, pos_start, pos_end, length, ranges)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (session.player, session.media_title, session.media_source, session.media_id,
+                 session.ts_start, session.ts_end, session.pos_start, session.pos_end,
+                 session.length, json.dumps(session.ranges)),
+            )
+            conn.commit()
+            return cur.lastrowid
+
+    def list_watch_sessions(self, *, player: str | None = None, start: int | None = None,
+                            end: int | None = None, limit: int = 20,
+                            offset: int = 0) -> tuple[int, list[dict]]:
+        self.query_count += 1
+        clauses, params = [], []
+        if player is not None:
+            clauses.append("player = ?")
+            params.append(player)
+        if start is not None:
+            clauses.append("ts_start >= ?")
+            params.append(start)
+        if end is not None:
+            clauses.append("ts_start <= ?")
+            params.append(end)
+        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+        with self._lock, self.conn() as conn:
+            total = conn.execute(
+                f"SELECT COUNT(*) FROM watch_sessions{where}", params).fetchone()[0]
+            rows = conn.execute(
+                f"SELECT {', '.join(SESSION_COLS)} FROM watch_sessions{where}"
+                " ORDER BY ts_start DESC LIMIT ? OFFSET ?",
+                (*params, limit, offset),
+            ).fetchall()
+            items = [_session_item(r) for r in rows]
+            return total, items
+
+    def get_watch_session(self, session_id: int) -> dict | None:
+        self.query_count += 1
+        with self._lock, self.conn() as conn:
+            row = conn.execute(
+                f"SELECT {', '.join(SESSION_COLS)} FROM watch_sessions WHERE id = ?",
+                (session_id,),
+            ).fetchone()
+            return _session_item(row) if row else None
+
+    def search_watch_sessions(self, query: str, *, player: str | None = None,
+                              limit: int = 20, offset: int = 0) -> tuple[int, list[dict]]:
+        """FTS5 over watch_sessions title/source — the #41 merged-search seam.
+
+        bm25 weights: title 2.0, source 1.0 (titles are cleaner identifiers).
+        Raises sqlite3.OperationalError on an invalid FTS5 MATCH.
+        """
+        self.query_count += 1
+        where = ["watch_sessions_fts MATCH ?"]
+        params = [query]
+        if player is not None:
+            where.append("s.player = ?")
+            params.append(player)
+        sql = (
+            "SELECT s.id, s.player, s.media_title, s.media_source, s.ts_start, s.ts_end,"
+            " s.pos_start, s.pos_end, s.length, s.ranges,"
+            " COALESCE(snippet(watch_sessions_fts, 0, '**', '**', ' … ', 14),"
+            "          snippet(watch_sessions_fts, 1, '**', '**', ' … ', 14)) AS snippet,"
+            " bm25(watch_sessions_fts, 2.0, 1.0) AS score"
+            " FROM watch_sessions_fts JOIN watch_sessions s ON s.id = watch_sessions_fts.rowid"
+            f" WHERE {' AND '.join(where)} ORDER BY score"
+            " LIMIT ? OFFSET ?"
+        )
+        with self._lock, self.conn() as conn:
+            total = conn.execute(
+                "SELECT COUNT(*) FROM watch_sessions_fts"
+                " JOIN watch_sessions s ON s.id = watch_sessions_fts.rowid"
+                f" WHERE {' AND '.join(where)}",
+                params,
+            ).fetchone()[0]
+            rows = conn.execute(sql, (*params, limit, offset)).fetchall()
+            return total, [_session_item(r) for r in rows]
+
+
+def _session_item(row: sqlite3.Row) -> dict:
+    item = dict(row)
+    try:
+        item["ranges"] = json.loads(item["ranges"]) if item["ranges"] else []
+    except (TypeError, ValueError):
+        item["ranges"] = []
+    return item
