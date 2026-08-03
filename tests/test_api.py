@@ -113,10 +113,22 @@ def test_search_kind_session_filter(api_client: TestClient, db):
     item = body["items"][0]
     assert item["kind"] == "session"
     for key in ("id", "player", "media_title", "media_source", "ts_start", "ts_end",
-                "snippet", "score"):
+                "snippet", "score", "live"):
         assert key in item
     assert item["media_title"] == "Inception (2010)"
     assert datetime.fromisoformat(item["ts_start"]).tzinfo is not None
+
+
+def test_search_session_live_renders_null_ts_end(api_client: TestClient, db):
+    """A live session surfaced by search keeps ts_end null and live: 1 (#37)."""
+    db.insert_live_session(
+        "vlc", "Inception (2010)", "file:///mnt/movies/Inception.mkv", None,
+        ts_start=1_000, pos_start=600_000_000, length=7_200_000_000,
+        ranges=[[600_000_000, 630_000_000]],
+    )
+    item = api_client.get("/search", params={"q": "inception", "kind": "session"}).json()["items"][0]
+    assert item["live"] == 1
+    assert item["ts_end"] is None
 
 
 def test_search_kind_invalid(api_client: TestClient):

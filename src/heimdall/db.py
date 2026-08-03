@@ -588,7 +588,7 @@ class Database:
         order_by = "s.ts_start DESC" if order == "ts" else "score"
         sql = (
             "SELECT s.id, s.player, s.media_title, s.media_source, s.ts_start, s.ts_end,"
-            " s.pos_start, s.pos_end, s.length, s.ranges,"
+            " s.pos_start, s.pos_end, s.length, s.ranges, s.live,"
             " COALESCE(snippet(watch_sessions_fts, 0, '**', '**', ' … ', 14),"
             "          snippet(watch_sessions_fts, 1, '**', '**', ' … ', 14)) AS snippet,"
             " bm25(watch_sessions_fts, 2.0, 1.0) AS score"
