@@ -162,6 +162,16 @@ class CaptureTools:
                         pass
 
 
+def _player_present(player: str, players: set[str]) -> bool:
+    """True when `player` (the `{{playerName}}` base, e.g. ``chromium``) is
+    among the `playerctl -l` instances (e.g. ``chromium.instance1220``).
+
+    `{{playerName}}` strips the instance suffix while `playerctl -l` returns
+    the full instance name, so a base name matches exactly or as a prefix.
+    """
+    return any(p == player or p.startswith(player + ".") for p in players)
+
+
 class CaptureDaemon:
     """Owns the queues, threads and DB writes. `run()` blocks until stopped."""
 
@@ -335,7 +345,7 @@ class CaptureDaemon:
             players = None
         now_ms = int(time.time() * 1000)
         for player in list(self.tracker.open_sessions()):
-            if players is not None and player not in players:
+            if players is not None and not _player_present(player, players):
                 self._persist_session(self.tracker.exit(player, now_ms))
                 continue
             position_us = self.tools.playerctl_position(player)

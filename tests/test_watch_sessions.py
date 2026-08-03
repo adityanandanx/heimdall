@@ -186,6 +186,22 @@ def test_watch_poll_persists_on_player_exit(tmp_path):
     assert daemon._live_rows == {}
 
 
+def test_watch_poll_matches_instanced_player_name(tmp_path):
+    """`playerctl -l` returns instance names (chromium.instance1220) while the
+    tracker keys by the base `{{playerName}}` (chromium); the poll must not
+    treat that as a player exit."""
+    tools = _FakeWatchTools(players=["chromium.instance1220"], position=910_000_000)
+    daemon = _daemon(tmp_path, tools)
+    daemon._on_track("Playing||My Video||chromium|900000000|7200000000|file:///v/my.mp4")
+
+    daemon._watch_poll_once()
+    total, items = daemon.db.list_watch_sessions()
+    assert total == 1
+    assert items[0]["live"] == 1  # still open, not exited
+    assert items[0]["pos_end"] == 910_000_000  # position still recorded
+    assert daemon._live_rows != {}
+
+
 def test_watch_poll_updates_live_row_for_later_close(tmp_path):
     """The 30s poll updates the live row's last known position, so a later
     close keeps the full watched range even when MPRIS reports position 0."""
