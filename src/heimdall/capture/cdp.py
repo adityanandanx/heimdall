@@ -198,6 +198,32 @@ def _evaluate(ws, target_id: str, expression: str, timeout: float):
         raise RuntimeError("page evaluation failed")
     return result.get("result", {}).get("value")
 
+def _match_page(ws, targets, window_title, *, evaluate, mpris_pos_us=None,
+                tolerance_us=ALIGN_TOLERANCE_US, timeout=8.0) -> Optional[dict]:
+    """Try each matching page target and return the first aligned resolution.
+
+    A page's `video.currentTime` must sit within tolerance of the MPRIS
+    position (or either side is unknown), so a duplicate tab playing something
+    else is never misattributed. Returns None when no page matches or aligns.
+    """
+    for target in pick_page_targets(targets, window_title):
+        try:
+            page = evaluate(ws, target["targetId"], _EVAL_EXPRESSION, timeout)
+        except Exception:  # noqa: BLE001
+            continue
+        if not isinstance(page, dict) or not page.get("href"):
+            continue
+        video_us = current_us(page.get("current"))
+        if not aligned(mpris_pos_us, video_us, tolerance_us):
+            continue
+        href = page["href"]
+        return {
+            "media_source": href,
+            "media_id": video_id_from_url(href),
+            "current_us": video_us,
+        }
+    return None
+
 
 def resolve_media(ws_url: str, window_title: str, *,
                   mpris_pos_us: Optional[int] = None,
@@ -207,10 +233,8 @@ def resolve_media(ws_url: str, window_title: str, *,
                   timeout: float = 8.0,
                   tolerance_us: int = ALIGN_TOLERANCE_US) -> Optional[dict]:
     """Resolve ``{media_source, media_id, current_us}`` for the window, or
-    None when CDP is unreachable / no tab matches / nothing aligns.
 
-    Candidates whose `video.currentTime` is far from the MPRIS position are
-    skipped, so a duplicate tab playing something else is never misattributed.
+    None when CDP is unreachable / no tab matches / nothing aligns.
     """
     if connect is None or get_targets is None or evaluate is None:
         return None
@@ -221,31 +245,95 @@ def resolve_media(ws_url: str, window_title: str, *,
     except Exception:  # noqa: BLE001
         return None
     try:
-        for target in pick_page_targets(targets, window_title):
-            try:
-                page = evaluate(ws, target["targetId"], _EVAL_EXPRESSION, timeout)
-            except Exception:  # noqa: BLE001
-                continue
-            if not isinstance(page, dict) or not page.get("href"):
-                continue
-            video_us = current_us(page.get("current"))
-            if not aligned(mpris_pos_us, video_us, tolerance_us):
-                continue
-            href = page["href"]
-            return {
-                "media_source": href,
-                "media_id": video_id_from_url(href),
-                "current_us": video_us,
-            }
-        return None
-    except Exception:  # noqa: BLE001
-        return None
+        return _match_page(
+            ws, targets, window_title,
+            evaluate=evaluate, mpris_pos_us=mpris_pos_us,
+            tolerance_us=tolerance_us, timeout=timeout,
+        )
     finally:
         if ws is not None:
             try:
                 ws.close()
             except Exception:  # noqa: BLE001
                 pass
+
+
+class CdpSession:
+    """One long-lived browser WebSocket, reused across daemon polls (#36).
+
+    Chrome 136+ asks the user to approve each new remote-debugging
+    connection; reopening on every poll tick would spam that dialog. Keeping a
+    single connection per browser turns it into one approval per browser
+    start. The connection is dropped only when it is actually dead, so a
+    no-match (a live connection with no fitting tab) is retried next poll on
+    the same socket.
+    """
+
+    def __init__(self, *, connect: Optional[Callable] = None,
+                 get_targets: Optional[Callable] = None,
+                 evaluate: Optional[Callable] = None,
+                 timeout: float = 8.0,
+                 tolerance_us: int = ALIGN_TOLERANCE_US):
+        self._connect = connect or _connect
+        self._get_targets = get_targets or _get_targets
+        self._evaluate = evaluate or _evaluate
+        self._timeout = timeout
+        self._tolerance_us = tolerance_us
+        self._ws = None
+        self._ws_url = None
+
+    def close(self) -> None:
+        if self._ws is not None:
+            try:
+                self._ws.close()
+            except Exception:  # noqa: BLE001
+                pass
+        self._ws = None
+        self._ws_url = None
+
+    def resolve(self, ws_url: str, window_title: str,
+                mpris_pos_us: Optional[int] = None) -> Optional[dict]:
+        try:
+            if self._ws is None or self._ws_url != ws_url:
+                self.close()
+                self._ws = self._connect(ws_url, self._timeout)
+                self._ws_url = ws_url
+            targets = self._get_targets(self._ws)
+        except Exception:  # noqa: BLE001
+            self.close()
+            return None
+        try:
+            return _match_page(
+                self._ws, targets, window_title,
+                evaluate=self._evaluate, mpris_pos_us=mpris_pos_us,
+                tolerance_us=self._tolerance_us, timeout=self._timeout,
+            )
+        except Exception:  # noqa: BLE001
+            self.close()
+            return None
+
+    def resolve_chromium_media(self, *, window_title: str,
+                               position_us: Optional[int] = None,
+                               config_root: Optional[Path] = None,
+                               profile_dirs=DEFAULT_PROFILE_DIRS) -> Optional[dict]:
+        """Resolve media from DevToolsActivePort, reusing this session.
+
+        Tries each profile dir under the config root (``~/.config`` by
+        default) until one yields a match; any failure returns None. Reuses
+        the socket across calls so a matching browser is approved once, not
+        once per poll.
+        """
+        root = Path(config_root) if config_root is not None else (
+            Path(os.path.expanduser("~")) / ".config"
+        )
+        for name in profile_dirs:
+            ws_url = read_browser_ws_url(root / name)
+            if ws_url is None:
+                continue
+            resolved = self.resolve(ws_url, window_title, position_us)
+            if resolved is not None:
+                return resolved
+        return None
 
 
 def resolve_chromium_media(*, window_title: str,

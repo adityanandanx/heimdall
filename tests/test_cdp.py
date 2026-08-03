@@ -50,6 +50,70 @@ def _fake_transport(targets, evaluations, raises=None):
     return connect, get_targets, evaluate
 
 
+class _CountingTransport:
+    """Track how many times the browser WebSocket is opened."""
+
+    def __init__(self, targets, evaluations, fail_first_targets=False):
+        self.targets = targets
+        self.evaluations = evaluations
+        self.fail_first_targets = fail_first_targets
+        self.connect_count = 0
+        self.targets_calls = 0
+
+    def connect(self, url, timeout):
+        self.connect_count += 1
+        return object()
+
+    def get_targets(self, ws):
+        self.targets_calls += 1
+        if self.fail_first_targets and self.connect_count == 1:
+            raise ConnectionError("browser closed")
+        return self.targets
+
+    def evaluate(self, ws, target_id, expression, timeout):
+        return self.evaluations[target_id]
+
+
+# ---- persistent session (Chrome 136+ approval prompt per connection) ----
+
+def test_cdp_session_reuses_socket_across_polls():
+    """One WebSocket is opened and reused: no-match polls do not reopen, so
+    Chrome's "Allow remote debugging?" approval appears once per browser."""
+    transport = _CountingTransport([PAGE_B], {})
+    session = cdp.CdpSession(
+        connect=transport.connect, get_targets=transport.get_targets,
+        evaluate=transport.evaluate)
+    for _ in range(3):
+        assert session.resolve("ws://x", TITLE) is None
+    assert transport.connect_count == 1
+    assert transport.targets_calls == 3
+
+
+def test_cdp_session_reconnects_when_socket_dies():
+    """A dead socket is dropped and the next poll opens a fresh one."""
+    transport = _CountingTransport([PAGE_A], {"TARGET_A": {"href": YT_URL, "current": 900.0}},
+                                   fail_first_targets=True)
+    session = cdp.CdpSession(
+        connect=transport.connect, get_targets=transport.get_targets,
+        evaluate=transport.evaluate)
+    assert session.resolve("ws://x", TITLE) is None   # dead -> None, closed
+    resolved = session.resolve("ws://x", TITLE)       # reconnects -> resolves
+    assert resolved == {"media_source": YT_URL, "media_id": YT_ID,
+                        "current_us": 900_000_000}
+    assert transport.connect_count == 2
+
+
+def test_cdp_session_reconnects_when_url_changes():
+    """A new browser (new DevToolsActivePort) gets a new connection."""
+    transport = _CountingTransport([PAGE_B], {})
+    session = cdp.CdpSession(
+        connect=transport.connect, get_targets=transport.get_targets,
+        evaluate=transport.evaluate)
+    assert session.resolve("ws://old", TITLE) is None
+    assert session.resolve("ws://new", TITLE) is None
+    assert transport.connect_count == 2
+
+
 # ---- DevToolsActivePort parsing ----
 
 def test_parse_active_port():

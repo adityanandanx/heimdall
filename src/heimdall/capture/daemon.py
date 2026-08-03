@@ -51,6 +51,7 @@ class CaptureTools:
     list_players: Callable[[], list[str]] = field(default=None)
     playerctl_position: Callable[[str], Optional[int]] = field(default=None)
     cdp_resolve: Callable[[str, Optional[int]], Optional[dict]] = field(default=None)
+    _cdp_session: object = field(default=None, init=False, repr=False)
 
     def __post_init__(self):
         if self.grim is None:
@@ -141,12 +142,18 @@ class CaptureTools:
         except ValueError:
             return None
 
-    @staticmethod
-    def _cdp_resolve(window_title: str, position_us: Optional[int]) -> Optional[dict]:
-        """Resolve {media_source, media_id} for a Chromium page via CDP (#36)."""
-        from heimdall.capture import cdp
+    def _cdp_resolve(self, window_title: str, position_us: Optional[int]) -> Optional[dict]:
+        """Resolve {media_source, media_id} for a Chromium page via CDP (#36).
 
-        return cdp.resolve_chromium_media(
+        Reuses one long-lived CDP connection so Chrome's per-connection
+        "Allow remote debugging?" prompt appears once per browser start, not
+        once per poll tick.
+        """
+        if self._cdp_session is None:
+            from heimdall.capture import cdp
+
+            self._cdp_session = cdp.CdpSession()
+        return self._cdp_session.resolve_chromium_media(
             window_title=window_title, position_us=position_us,
         )
 
