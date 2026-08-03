@@ -3,7 +3,10 @@ dedupe + span-timing computation with crafted sequences."""
 
 from __future__ import annotations
 
+from io import BytesIO
 from typing import Callable, Optional
+
+from PIL import Image, ImageDraw
 
 from heimdall.capture.events import (
     activewindow_signature,
@@ -203,24 +206,46 @@ def _blank_tree() -> list[dict]:
 
 
 class _FakeTools:
-    """CaptureTools with an injectable a11y reader; no subprocess tools."""
+    """CaptureTools with an injectable a11y reader + rapid_ocr; no subprocess tools."""
 
-    def __init__(self, reader: Callable[[str, str], Optional[list]]):
-        self.a11y_read = reader
+    def __init__(self, reader: Optional[Callable[[str, str], Optional[list]]] = None,
+                 rapid: Optional[Callable[[bytes], Optional[str]]] = None):
+        self.a11y_read = reader if reader is not None else lambda c, t: None
+        self.rapid_ocr = rapid if rapid is not None else lambda img: None
         self.grim = lambda *a: b"jpeg"
         self.activewindow = lambda: {"class": "google-chrome", "title": "page",
                                      "workspace": {"id": 2, "name": "2"},
                                      "at": [0, 0], "size": [10, 10]}
 
 
+def _png() -> bytes:
+    im = Image.new("RGB", (40, 20), "white")
+    ImageDraw.Draw(im).rectangle([10, 4, 30, 16], fill="black")
+    buf = BytesIO()
+    im.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def _small_png() -> bytes:
+    """A genuinely different image from _png(): a tiny square only."""
+    im = Image.new("RGB", (40, 20), "white")
+    ImageDraw.Draw(im).rectangle([18, 8, 22, 12], fill="black")
+    buf = BytesIO()
+    im.save(buf, format="PNG")
+    return buf.getvalue()
+
+
 def test_extract_worker_stores_a11y_when_content_bearing(tmp_path):
-    """A content-bearing tree becomes a11y_text/a11y_json; no ocr_text is set."""
+    """A content-bearing tree becomes a11y_text/a11y_json; no ocr_text is set
+    and RapidOCR is not run (routing: a11y wins, ticket #34)."""
     from heimdall.capture.daemon import CaptureDaemon
     from heimdall.config import Config
     from heimdall.db import init_db
 
+    calls = []
     daemon = CaptureDaemon(Config(data_dir=tmp_path),
-                           tools=_FakeTools(lambda c, t: content_tree()))
+                           tools=_FakeTools(lambda c, t: content_tree(),
+                                            rapid=lambda img: (calls.append(img), "nope")[1]))
     init_db(path=daemon.db_path)
     frame_id = daemon.db.insert_frame(dict(ts=1, monitor=0, workspace=2,
                                            window_class="google-chrome",
@@ -239,16 +264,20 @@ def test_extract_worker_stores_a11y_when_content_bearing(tmp_path):
     assert frame["ocr_text"] is None
     assert frame["ocr_sec"] is None
     assert frame["ocr_engine"] is None
+    assert calls == []
 
 
-def test_extract_worker_null_text_when_a11y_blind(tmp_path):
-    """kitty and other off-bus windows store NULL text; no OCR subprocess runs."""
+def test_extract_worker_blind_auto_uses_rapidocr(tmp_path):
+    """A blind window (kitty) in auto mode stores a11y NULL + RapidOCR text
+    with ocr_engine='rapid' (the #34 fallback replaces the NULL gap)."""
     from heimdall.capture.daemon import CaptureDaemon
     from heimdall.config import Config
     from heimdall.db import init_db
 
     for reader in (lambda c, t: None, lambda c, t: _blank_tree()):
-        daemon = CaptureDaemon(Config(data_dir=tmp_path), tools=_FakeTools(reader))
+        calls = []
+        tools = _FakeTools(reader, rapid=lambda img: (calls.append(img), "fallback text")[1])
+        daemon = CaptureDaemon(Config(data_dir=tmp_path), tools=tools)
         init_db(path=daemon.db_path)
         frame_id = daemon.db.insert_frame(dict(ts=1, monitor=0, workspace=2,
                                                window_class="kitty", window_title="zsh",
@@ -261,7 +290,115 @@ def test_extract_worker_null_text_when_a11y_blind(tmp_path):
         frame = daemon.db.get_frame(frame_id)
         assert frame["a11y_text"] is None
         assert frame["a11y_json"] is None
-        assert frame["ocr_text"] is None
+        assert frame["ocr_text"] == "fallback text"
+        assert frame["ocr_engine"] == "rapid"
+        assert calls == [b"jpeg"]
+
+
+def test_extract_worker_merge_class_stores_both(tmp_path):
+    """A window_class in capture.window_class_merge (ocr_also) stores a11y_text
+    AND ocr_text, even when the a11y tree is content-bearing."""
+    from heimdall.capture.daemon import CaptureDaemon
+    from heimdall.config import Config
+    from heimdall.db import init_db
+
+    cfg = Config(data_dir=tmp_path)
+    cfg.capture.window_class_merge = {"code": "ocr_also"}
+    daemon = CaptureDaemon(cfg, tools=_FakeTools(
+        lambda c, t: content_tree(), rapid=lambda img: "ocr-side text"))
+    init_db(path=daemon.db_path)
+    frame_id = daemon.db.insert_frame(dict(ts=1, monitor=0, workspace=2,
+                                           window_class="code", window_title="x.py",
+                                           fullscreen=0, trigger="activewindow",
+                                           image_path="f.jpg", image_bytes=1,
+                                           ocr_text=None, ocr_sec=None))
+    daemon.extract_jobs.put((frame_id, "code", "x.py", b"jpeg"))
+    daemon.extract_jobs.put(None)
+    daemon._extract_worker()
+    frame = daemon.db.get_frame(frame_id)
+    assert "Accessibility Test Page" in frame["a11y_text"]
+    assert frame["a11y_json"] is not None
+    assert frame["ocr_text"] == "ocr-side text"
+    assert frame["ocr_engine"] == "rapid"
+
+
+def test_extract_worker_merge_class_blind_still_runs_ocr(tmp_path):
+    """A merge class that is a11y-blind still gets RapidOCR text (a11y NULL)."""
+    from heimdall.capture.daemon import CaptureDaemon
+    from heimdall.config import Config
+    from heimdall.db import init_db
+
+    cfg = Config(data_dir=tmp_path)
+    cfg.capture.window_class_merge = {"thunar": "ocr_also"}
+    daemon = CaptureDaemon(cfg, tools=_FakeTools(
+        lambda c, t: None, rapid=lambda img: "file manager"))
+    init_db(path=daemon.db_path)
+    frame_id = daemon.db.insert_frame(dict(ts=1, monitor=0, workspace=2,
+                                           window_class="thunar", window_title="~",
+                                           fullscreen=0, trigger="activewindow",
+                                           image_path="f.jpg", image_bytes=1,
+                                           ocr_text=None, ocr_sec=None))
+    daemon.extract_jobs.put((frame_id, "thunar", "~", b"jpeg"))
+    daemon.extract_jobs.put(None)
+    daemon._extract_worker()
+    frame = daemon.db.get_frame(frame_id)
+    assert frame["a11y_text"] is None
+    assert frame["ocr_text"] == "file manager"
+    assert frame["ocr_engine"] == "rapid"
+
+
+def test_extract_worker_ocr_mode_uses_rapid_only(tmp_path):
+    """capture.extraction='ocr' stores RapidOCR text and leaves a11y untouched,
+    even when the tree would have been content-bearing."""
+    from heimdall.capture.daemon import CaptureDaemon
+    from heimdall.config import Config
+    from heimdall.db import init_db
+
+    cfg = Config(data_dir=tmp_path)
+    cfg.capture.extraction = "ocr"
+    calls = []
+    daemon = CaptureDaemon(cfg, tools=_FakeTools(
+        lambda c, t: content_tree(), rapid=lambda img: (calls.append(img), "ocr text")[1]))
+    init_db(path=daemon.db_path)
+    frame_id = daemon.db.insert_frame(dict(ts=1, monitor=0, workspace=2,
+                                           window_class="firefox", window_title="page",
+                                           fullscreen=0, trigger="activewindow",
+                                           image_path="f.jpg", image_bytes=1,
+                                           ocr_text=None, ocr_sec=None))
+    daemon.extract_jobs.put((frame_id, "firefox", "page", b"jpeg"))
+    daemon.extract_jobs.put(None)
+    daemon._extract_worker()
+    frame = daemon.db.get_frame(frame_id)
+    assert frame["a11y_text"] is None
+    assert frame["ocr_text"] == "ocr text"
+    assert frame["ocr_engine"] == "rapid"
+    assert calls == [b"jpeg"]
+
+
+def test_extract_worker_a11y_mode_blind_stores_nothing(tmp_path):
+    """capture.extraction='a11y' never runs RapidOCR, even on blind windows."""
+    from heimdall.capture.daemon import CaptureDaemon
+    from heimdall.config import Config
+    from heimdall.db import init_db
+
+    cfg = Config(data_dir=tmp_path)
+    cfg.capture.extraction = "a11y"
+    calls = []
+    daemon = CaptureDaemon(cfg, tools=_FakeTools(
+        lambda c, t: None, rapid=lambda img: (calls.append(img), "x")[1]))
+    init_db(path=daemon.db_path)
+    frame_id = daemon.db.insert_frame(dict(ts=1, monitor=0, workspace=2,
+                                           window_class="kitty", window_title="zsh",
+                                           fullscreen=0, trigger="activewindow",
+                                           image_path="f.jpg", image_bytes=1,
+                                           ocr_text=None, ocr_sec=None))
+    daemon.extract_jobs.put((frame_id, "kitty", "zsh", b"jpeg"))
+    daemon.extract_jobs.put(None)
+    daemon._extract_worker()
+    frame = daemon.db.get_frame(frame_id)
+    assert frame["a11y_text"] is None
+    assert frame["ocr_text"] is None
+    assert calls == []
 
 
 def test_capture_worker_passes_window_meta_for_extraction(tmp_path):
@@ -296,3 +433,84 @@ def test_tesseract_removed_from_tools():
     tools = CaptureTools()
     assert not hasattr(tools, "ocr")
     assert not hasattr(tools, "_ocr")
+
+
+# ---- per-window perceptual-hash change gate (ticket #34) ----
+
+def _gate_daemon(tmp_path, titles=None, images=None):
+    """A daemon wired for change-gate tests: real PNGs from grim so phash works,
+    per-job window titles (lazily consumed, so jobs aren't signature-duplicate)
+    and no min-interval throttle so back-to-back jobs both run."""
+    from heimdall.capture.daemon import CaptureDaemon
+    from heimdall.config import Config
+    from heimdall.db import init_db
+
+    cfg = Config(data_dir=tmp_path)
+    cfg.capture.min_interval_s = 0
+    titles = iter(titles or ["zsh — htop", "zsh — pacman"])
+    images = iter(images or [_png(), _png()])
+    tools = _FakeTools(reader=None, rapid=lambda img: "re-extracted")
+    tools.grim = lambda *a: next(images)
+    tools.activewindow = lambda: {"class": "kitty", "title": next(titles),
+                                  "workspace": {"id": 1, "name": "1"},
+                                  "at": [0, 0], "size": [40, 20]}
+    daemon = CaptureDaemon(cfg, tools=tools)
+    init_db(path=daemon.db_path)
+    return daemon
+
+
+def test_change_gate_skips_unchanged_keepalive(tmp_path):
+    """A keepalive capture whose pixels are unchanged for the window is stored
+    but not re-extracted; the change-gate skips the extract job."""
+    daemon = _gate_daemon(tmp_path)
+    daemon.jobs.put(("keepalive", 1))
+    daemon.jobs.put(("keepalive", 2))
+    daemon.jobs.put(None)
+    daemon._capture_worker()
+
+    total, frames = daemon.db.list_frames(limit=10)
+    assert total == 2                    # both frames stored
+    assert daemon.extract_jobs.qsize() == 1  # only the first was extracted
+
+
+def test_change_gate_event_trigger_re_extracts(tmp_path):
+    """The next event-triggered capture re-extracts even for unchanged pixels
+    (the gate only applies to keepalive triggers)."""
+    daemon = _gate_daemon(tmp_path, ["t1", "t2", "t3"], [_png(), _png(), _png()])
+    daemon.jobs.put(("keepalive", 1))
+    daemon.jobs.put(("keepalive", 2))   # stored, gate skips re-extraction
+    daemon.jobs.put(("activewindow", 3))  # event trigger always extracts
+    daemon.jobs.put(None)
+    daemon._capture_worker()
+
+    total, _ = daemon.db.list_frames(limit=10)
+    assert total == 3
+    assert daemon.extract_jobs.qsize() == 2
+
+
+def test_change_gate_changed_pixels_re_extracts(tmp_path):
+    """A keepalive capture whose pixels actually changed is extracted."""
+    daemon = _gate_daemon(tmp_path, images=[_png(), _small_png()])
+    daemon.jobs.put(("keepalive", 1))
+    daemon.jobs.put(("keepalive", 2))
+    daemon.jobs.put(None)
+    daemon._capture_worker()
+
+    total, _ = daemon.db.list_frames(limit=10)
+    assert total == 2
+    assert daemon.extract_jobs.qsize() == 2
+
+
+def test_change_gate_disabled_always_extracts(tmp_path):
+    """capture.change_gate=false disables the gate: unchanged keepalive frames
+    are still re-extracted."""
+    daemon = _gate_daemon(tmp_path)
+    daemon.config.capture.change_gate = False
+    daemon.jobs.put(("keepalive", 1))
+    daemon.jobs.put(("keepalive", 2))
+    daemon.jobs.put(None)
+    daemon._capture_worker()
+
+    total, _ = daemon.db.list_frames(limit=10)
+    assert total == 2
+    assert daemon.extract_jobs.qsize() == 2

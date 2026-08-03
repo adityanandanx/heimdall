@@ -25,6 +25,8 @@ from typing import Callable, Iterable, Optional
 
 from heimdall.capture.a11y import content_bearing, flatten_text
 from heimdall.capture.events import activewindow_signature, classify_trigger, is_duplicate, is_track_change, parse_socket2_line, should_capture, workspace_id
+from heimdall.capture.ocr import route_extraction
+from heimdall.capture.phash import phash
 from heimdall.capture.sessions import SessionTracker, WatchSession, parse_mpris_line
 from heimdall.config import Config, load_config
 from heimdall.db import Database, init_db
@@ -44,6 +46,7 @@ class CaptureTools:
     grim: Callable[[int, int, int, int], Optional[bytes]] = field(default=None)
     activewindow: Callable[[], Optional[dict]] = field(default=None)
     a11y_read: Callable[[str, str], Optional[list]] = field(default=None)
+    rapid_ocr: Callable[[bytes], Optional[str]] = field(default=None)
     playerctl_follow: Callable[[], Iterable[str]] = field(default=None)
     list_players: Callable[[], list[str]] = field(default=None)
     playerctl_position: Callable[[str], Optional[int]] = field(default=None)
@@ -55,6 +58,8 @@ class CaptureTools:
             self.activewindow = self._activewindow
         if self.a11y_read is None:
             self.a11y_read = self._a11y_read
+        if self.rapid_ocr is None:
+            self.rapid_ocr = self._rapid_ocr
         if self.playerctl_follow is None:
             self.playerctl_follow = self._playerctl_follow
         if self.list_players is None:
@@ -93,6 +98,12 @@ class CaptureTools:
         from heimdall.capture import a11y
 
         return a11y.read_window_tree(window_class, window_title)
+
+    @staticmethod
+    def _rapid_ocr(img: bytes) -> Optional[str]:
+        from heimdall.capture import ocr
+
+        return ocr.rapid_ocr(img)
 
     @staticmethod
     def _playerctl_follow() -> Iterable[str]:
@@ -191,6 +202,7 @@ class CaptureDaemon:
         self._last_track_status: str | None = None
         self.tracker = SessionTracker(pause_ends_session_s=config.watch.pause_ends_session_s)
         self._live_rows: dict[str, int] = {}  # player -> watch_sessions row id
+        self._last_phash: dict[str, str] = {}  # window_class -> phash (change gate, #34)
         self.events_q: queue.Queue[str] = queue.Queue()
         self.jobs: queue.Queue[Job] = queue.Queue()
         self.extract_jobs: queue.Queue[ExtractJob] = queue.Queue()
@@ -395,10 +407,24 @@ class CaptureDaemon:
                 log.warning("grim capture failed")
                 continue
             frame_id = self._store_frame(ts, meta, trigger, img)
-            if frame_id:
+            if frame_id and self._should_extract(trigger, meta.get("class") or "", img):
                 self.extract_jobs.put(
                     (frame_id, meta.get("class") or "", meta.get("title") or "", img)
                 )
+
+    def _should_extract(self, trigger: str, window_class: str, img: bytes) -> bool:
+        """Per-window change gate (#34): a keepalive capture whose pixels are
+        unchanged for the window is stored but not re-extracted; event-triggered
+        captures always extract. Disabled by capture.change_gate=false."""
+        if not self.config.capture.change_gate:
+            return True
+        h = phash(img)
+        if h is None:
+            return True
+        if trigger == "keepalive" and h == self._last_phash.get(window_class):
+            return False
+        self._last_phash[window_class] = h
+        return True
 
     def _store_frame(self, ts: int, meta: dict, trigger: str, img: bytes) -> Optional[int]:
         dt = time.localtime(ts / 1000)
@@ -422,33 +448,43 @@ class CaptureDaemon:
         })
 
     def _extract_worker(self) -> None:
-        """Extraction queue: a11y read -> content-bearing test -> frame text.
+        """Extraction queue: route each frame to a11y and/or RapidOCR (#34).
 
-        A content-bearing tree wins and stores a11y_text + a11y_json; a11y-blind
-        windows store NULL text (the RapidOCR fallback owns them, ticket #34).
-        No OCR subprocess runs here — tesseract is retired (v2 #33).
+        `route_extraction` picks the source(s): a11y wins in auto mode, blind
+        windows fall back to RapidOCR, and `window_class_merge` classes store
+        both. RapidOCR runs in this queue so it never blocks a capture.
         """
         if self.config.capture.extraction not in ("auto", "a11y", "ocr"):
             log.warning("capture.extraction=%r is not a known mode; treating as auto",
                         self.config.capture.extraction)
-        elif self.config.capture.extraction == "ocr":
-            log.warning("capture.extraction=ocr is not wired until the RapidOCR "
-                        "fallback (ticket #34); frames store NULL text")
+        mode = self.config.capture.extraction
+        merge = self.config.capture.window_class_merge
         while True:
             item = self.extract_jobs.get()
             if item is None:
                 break
-            frame_id, window_class, window_title, _img = item
-            if self.config.capture.extraction in ("auto", "a11y"):
+            frame_id, window_class, window_title, img = item
+            tree = None
+            if mode in ("auto", "a11y"):
                 tree = self.tools.a11y_read(window_class, window_title)
-                if tree and content_bearing(tree):
+            bearing = bool(tree and content_bearing(tree))
+            route = route_extraction(mode, bearing, window_class, merge)
+            if route in ("a11y", "both"):
+                if bearing:
                     self.db.set_frame_extraction(
                         frame_id,
                         a11y_text=flatten_text(tree),
                         a11y_json=json.dumps(tree, ensure_ascii=False),
                     )
-                    continue
-            self.db.set_frame_extraction(frame_id, a11y_text=None, a11y_json=None)
+                else:
+                    self.db.set_frame_extraction(frame_id, a11y_text=None, a11y_json=None)
+            if route in ("ocr", "both"):
+                text = self.tools.rapid_ocr(img)
+                self.db.set_frame_extraction(
+                    frame_id,
+                    ocr_text=text,
+                    ocr_engine="rapid",
+                )
 
     def _heartbeat_loop(self) -> None:
         while not self._stop.wait(15):
