@@ -132,3 +132,64 @@ def test_events_roundtrip(db):
         {"ts": 1, "raw": "activewindow>>kitty,foo"},
         {"ts": 2, "raw": "workspace>>2"},
     ]
+
+
+# ---- live watch-session rows (follow-up to #35) ----
+
+def test_fresh_db_has_live_column_on_watch_sessions(db_path_tmp):
+    init_db(db_path_tmp)
+    conn = sqlite3.connect(db_path_tmp)
+    cols = {r[1]: (r[2], r[3], r[4]) for r in
+            conn.execute("PRAGMA table_info(watch_sessions)")}
+    conn.close()
+    assert cols["live"] == ("INTEGER", 1, "0")  # NOT NULL DEFAULT 0
+
+
+def test_live_session_insert_update_finalize_round_trip(tmp_path):
+    db = Database(tmp_path / "db.sqlite")
+    init_db(db.path)
+    row_id = db.insert_live_session(
+        "vlc", "Inception (2010)", "file:///mnt/movies/Inception.mkv", None,
+        ts_start=1_000, pos_start=600_000_000, length=7_200_000_000,
+        ranges=[[600_000_000, 600_000_000]],
+    )
+    total, items = db.list_watch_sessions()
+    assert total == 1
+    item = items[0]
+    assert item["id"] == row_id
+    assert item["live"] == 1
+    assert item["ts_end"] == 0
+    assert item["pos_end"] == 600_000_000  # pos_end mirrors pos_start while live
+
+    db.update_live_session(row_id, ts_end=61_000, pos_end=630_000_000,
+                           ranges=[[600_000_000, 630_000_000]])
+    item = db.get_watch_session(row_id)
+    assert item["live"] == 1
+    assert item["ts_end"] == 61_000
+    assert item["ranges"] == [[600_000_000, 630_000_000]]
+
+    db.finalize_live_session(row_id, ts_end=130_000, pos_end=900_000_000,
+                             ranges=[[600_000_000, 900_000_000]])
+    item = db.get_watch_session(row_id)
+    assert item["live"] == 0
+    assert item["ts_end"] == 130_000
+    assert item["pos_end"] == 900_000_000
+    assert item["ranges"] == [[600_000_000, 900_000_000]]
+
+
+def test_update_live_session_only_touches_live_rows(tmp_path):
+    from heimdall.capture.sessions import SessionTracker
+
+    db = Database(tmp_path / "db.sqlite")
+    init_db(db.path)
+    t = SessionTracker()
+    t.play("vlc", title="Inception (2010)", source="file:///mnt/movies/Inception.mkv",
+           position_us=600_000_000, length_us=7_200_000_000, wall_ms=1_000)
+    finished_id = db.insert_watch_session(
+        t.stop("vlc", position_us=900_000_000, wall_ms=130_000))
+
+    db.update_live_session(finished_id, ts_end=999, pos_end=999,
+                           ranges=[[0, 999]])
+    item = db.get_watch_session(finished_id)
+    assert item["ts_end"] != 999
+    assert item["live"] == 0

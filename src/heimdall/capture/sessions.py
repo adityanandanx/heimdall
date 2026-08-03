@@ -33,6 +33,29 @@ class WatchSession:
 
 
 @dataclass
+class OpenSession:
+    """Read-only view of an in-progress session (the live-row sync source).
+
+    Deliberately mirrors `_Open` plus the derived `paused` flag so the daemon
+    can persist and display live rows without reaching into tracker internals.
+    """
+
+    player: str
+    media_title: Optional[str]
+    media_source: Optional[str]
+    media_id: Optional[str]
+    ts_start: int
+    pos_start: int
+    length: int
+    last_pos_us: int
+    ranges: list[list[int]]
+    paused: bool
+    acc_wall_ms: int
+    streak_start_wall_ms: Optional[int]
+    paused_at_wall_ms: Optional[int]
+
+
+@dataclass
 class _Open:
     """Live tracker state for one player."""
 
@@ -173,6 +196,31 @@ class SessionTracker:
     def open_sessions(self) -> list[str]:
         """Players with an open session (the poll loop iterates these)."""
         return list(self._open)
+
+    def snapshot(self) -> list[OpenSession]:
+        """Read-only view of every open session, one per player.
+
+        Pure: never mutates tracker state or closes anything, so reading is
+        safe from the daemon's poll and follow threads at any moment.
+        """
+        return [
+            OpenSession(
+                player=op.player,
+                media_title=op.media_title,
+                media_source=op.media_source,
+                media_id=op.media_id,
+                ts_start=op.ts_start,
+                pos_start=op.pos_start,
+                length=op.length,
+                last_pos_us=op.last_poll_pos_us,
+                ranges=list(op.ranges),
+                paused=op.paused_at_wall_ms is not None,
+                acc_wall_ms=op.acc_wall_ms,
+                streak_start_wall_ms=op.streak_start_wall_ms,
+                paused_at_wall_ms=op.paused_at_wall_ms,
+            )
+            for op in self._open.values()
+        ]
 
     def _close(self, player: str, position_us: Optional[int],
                wall_ms: int) -> Optional[WatchSession]:

@@ -111,6 +111,67 @@ def test_seek_backwards_still_splits():
     assert closed.ranges == [[0, 300_000_000], [30_000_000, 90_000_000]]
 
 
+# ---- snapshot: read-only view of open sessions for live rows ----
+
+def test_snapshot_reports_open_playing_session():
+    t = SessionTracker()
+    _play(t, position_us=600_000_000, wall_ms=1_000)
+    t.poll(player="vlc", position_us=630_000_000, wall_ms=31_000)
+    snap = t.snapshot()
+    assert len(snap) == 1
+    s = snap[0]
+    assert s.player == "vlc"
+    assert s.media_title == "Inception (2010)"
+    assert s.media_source == "file:///mnt/movies/Inception.mkv"
+    assert s.media_id is None
+    assert s.ts_start == 1_000
+    assert s.pos_start == 600_000_000
+    assert s.length == 7_200_000_000
+    assert s.last_pos_us == 630_000_000
+    assert s.ranges == []
+    assert s.paused is False
+    assert s.paused_at_wall_ms is None
+    # the session is untouched by snapshot()
+    assert len(t.open_sessions()) == 1
+
+
+def test_snapshot_reports_paused_session():
+    t = SessionTracker()
+    _play(t, position_us=600_000_000, wall_ms=1_000)
+    t.pause(player="vlc", position_us=630_000_000, wall_ms=31_000)
+    s = t.snapshot()[0]
+    assert s.paused is True
+    assert s.paused_at_wall_ms == 31_000
+    assert s.last_pos_us == 630_000_000
+
+
+def test_snapshot_includes_wall_accrual_and_streak_fields():
+    t = SessionTracker()
+    _play(t, position_us=600_000_000, wall_ms=1_000)
+    t.poll(player="vlc", position_us=630_000_000, wall_ms=31_000)
+    t.pause(player="vlc", position_us=630_000_000, wall_ms=31_000)  # closes the streak
+    s = t.snapshot()[0]
+    assert s.acc_wall_ms == 30_000
+    assert s.streak_start_wall_ms is None  # paused: no streak running
+    assert s.paused_at_wall_ms == 31_000
+
+
+def test_snapshot_empty_when_no_open_sessions():
+    t = SessionTracker()
+    _play(t, wall_ms=1_000)
+    t.stop(player="vlc", position_us=900_000_000, wall_ms=130_000)
+    assert t.snapshot() == []
+
+
+def test_snapshot_does_not_advance_or_close_anything():
+    t = SessionTracker(pause_ends_session_s=0.001)
+    _play(t, position_us=600_000_000, wall_ms=1_000)
+    t.pause(player="vlc", position_us=630_000_000, wall_ms=31_000)
+    t.snapshot()  # reading must not close a past-threshold paused session
+    assert len(t.open_sessions()) == 1
+    assert t.snapshot()[0].paused is True
+
+
 # ---- player-exit ----
 
 def test_player_exit_closes_session():

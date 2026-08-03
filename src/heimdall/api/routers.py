@@ -54,9 +54,17 @@ def _iso(items: list[dict]) -> list[dict]:
 
 
 def _session_iso(items: list[dict]) -> list[dict]:
+    """API times are ISO-8601 with timezone (spec #7); DB stores epoch ms.
+
+    A live (in-progress) row stores ts_end=0; it renders as null so the preview
+    can show a wall span against "now" instead of the epoch.
+    """
     for it in items:
         it["ts_start"] = ts_to_iso(it["ts_start"])
-        it["ts_end"] = ts_to_iso(it["ts_end"])
+        if it.get("live") and it["ts_end"] == 0:
+            it["ts_end"] = None
+        else:
+            it["ts_end"] = ts_to_iso(it["ts_end"])
     return items
 
 
@@ -265,6 +273,8 @@ PREVIEW_HTML = """<!doctype html>
   .ranges { color: #cc8; }
   .span { color: #8af; white-space: nowrap; }
   .transcript { color: #aaa; max-width: 40rem; }
+  .badge { color: #0c0; font-size: 0.75rem; }
+  .badge.paused { color: #f90; }
   #meta { color: #888; margin: 0.4rem 0 1rem; }
 </style>
 </head>
@@ -289,7 +299,8 @@ function fmtVideo(us) {
            : m + ":" + String(sec).padStart(2, "0");
 }
 function fmtWall(a, b) {
-  const ms = Math.max(0, new Date(b) - new Date(a));
+  const end = b == null ? new Date() : new Date(b);   // live rows run to "now"
+  const ms = Math.max(0, end - new Date(a));
   const s = Math.floor(ms / 1000), m = Math.floor(s / 60), h = Math.floor(m / 60);
   return (h ? h + "h" : "") + (m % 60) + "m" + String(s % 60).padStart(2, "0") + "s";
 }
@@ -301,17 +312,25 @@ async function refresh() {
   try {
     const r = await fetch("/sessions?limit=50");
     const body = await r.json();
-    $meta.textContent = body.total + " watch session(s) — auto-refresh 5s";
+    const live = body.items.filter(it => it.live).length;
+    $meta.textContent = body.total + " watch session(s) — " + live + " live · "
+      + (body.total - live) + " finished — auto-refresh 5s";
     const rows = body.items.map(it => {
       const ranges = (it.ranges || []).map(r => fmtVideo(r[0]) + "–" + fmtVideo(r[1])).join(", ") || "—";
       const src = it.media_source ? '<span class="src">' + esc(it.media_source) + "</span>" : "—";
+      const badge = it.live
+        ? (it.paused
+            ? '<span class="badge paused">● paused</span> '
+            : '<span class="badge">● watching</span> ')
+        : "";
+      const title = badge + esc(it.media_title);
       return "<tr><td>" + esc(it.ts_start) + "</td>"
         + '<td class="player">' + esc(it.player) + "</td>"
-        + "<td>" + esc(it.media_title) + "</td>"
+        + "<td>" + title + "</td>"
         + "<td>" + src + "</td>"
         + '<td class="ranges">' + esc(ranges) + "</td>"
         + '<td class="span">' + fmtWall(it.ts_start, it.ts_end) + "</td>"
-        + '<td class="transcript">' + (it.transcript ? esc(it.transcript) : "") + "</td></tr>";
+        + '<td class="transcript">' + (it.transcript && !it.live ? esc(it.transcript) : "") + "</td></tr>";
     }).join("");
     $rows.innerHTML = rows || '<tr><td colspan="7">no sessions yet</td></tr>';
   } catch (e) { /* keep the last table on transient errors */ }

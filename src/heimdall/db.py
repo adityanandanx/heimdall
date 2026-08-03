@@ -116,7 +116,8 @@ CREATE TABLE IF NOT EXISTS watch_sessions (
     pos_start INTEGER NOT NULL,       -- video-time microseconds
     pos_end INTEGER NOT NULL,
     length INTEGER NOT NULL,          -- video length in microseconds
-    ranges TEXT NOT NULL              -- JSON [[start_us, end_us], ...]; skipped segments excluded
+    ranges TEXT NOT NULL,             -- JSON [[start_us, end_us], ...]; skipped segments excluded
+    live INTEGER NOT NULL DEFAULT 0   -- 1 while the session is in progress
 );
 
 CREATE INDEX IF NOT EXISTS idx_frames_ts ON frames(ts);
@@ -137,7 +138,7 @@ SEARCH_COLS = ("id", "ts", "window_class", "window_title", "workspace", "image_p
 
 SESSION_COLS = (
     "id", "player", "media_title", "media_source", "media_id",
-    "ts_start", "ts_end", "pos_start", "pos_end", "length", "ranges",
+    "ts_start", "ts_end", "pos_start", "pos_end", "length", "ranges", "live",
 )
 
 
@@ -167,23 +168,77 @@ def _migrate_v2(conn: sqlite3.Connection) -> None:
 
     External-content FTS cannot add a column in place — it must be dropped and
     recreated, then repopulated with `rebuild`. Triggers are recreated with it.
+
+    Some legacy live DBs were created with `ocr_text TEXT NOT NULL DEFAULT ''`;
+    the v2 a11y-first path stores NULL for a11y-blind windows, so that column is
+    relaxed (table rebuild) when it still carries the NOT NULL constraint.
     """
-    cols = {r[1] for r in conn.execute("PRAGMA table_info(frames)")}
+    info = {r[1]: r for r in conn.execute("PRAGMA table_info(frames)")}
     for col in ("a11y_text", "a11y_json", "ocr_engine"):
-        if col not in cols:
+        if col not in info:
             conn.execute(f"ALTER TABLE frames ADD COLUMN {col} TEXT")
+    ws_cols = {r[1] for r in conn.execute("PRAGMA table_info(watch_sessions)")}
+    if "live" not in ws_cols:
+        conn.execute("ALTER TABLE watch_sessions ADD COLUMN live INTEGER NOT NULL DEFAULT 0")
+    need_frames_rebuild = bool(info["ocr_text"][3])  # notnull flag
     row = conn.execute(
         "SELECT sql FROM sqlite_master WHERE type='table' AND name='frames_fts'"
     ).fetchone()
     fts_sql = row[0] if row else ""
-    if "a11y_text" in fts_sql:
+    if "a11y_text" in fts_sql and not need_frames_rebuild:
         return
+    if need_frames_rebuild:
+        _rebuild_frames_table(conn)
     conn.execute("DROP TRIGGER IF EXISTS frames_ai")
     conn.execute("DROP TRIGGER IF EXISTS frames_ad")
     conn.execute("DROP TRIGGER IF EXISTS frames_au")
     conn.execute("DROP TABLE IF EXISTS frames_fts")
     conn.executescript(FTS_SCHEMA)
     conn.execute("INSERT INTO frames_fts(frames_fts) VALUES('rebuild')")
+
+
+def _rebuild_frames_table(conn: sqlite3.Connection) -> None:
+    """Recreate `frames` with the v2 shape (nullable ocr_text), preserving rows.
+
+    SQLite cannot drop a NOT NULL constraint in place, so the table is rebuilt:
+    the FTS triggers are dropped first, rows copied verbatim, then the FTS table
+    is dropped and recreated with the new schema by _migrate_v2.
+    """
+    conn.executescript(
+        """
+        DROP TRIGGER IF EXISTS frames_ai;
+        DROP TRIGGER IF EXISTS frames_ad;
+        DROP TRIGGER IF EXISTS frames_au;
+        CREATE TABLE frames_v2 (
+            id INTEGER PRIMARY KEY,
+            ts INTEGER NOT NULL,
+            monitor INTEGER,
+            workspace INTEGER,
+            window_class TEXT,
+            window_title TEXT,
+            fullscreen INTEGER,
+            trigger TEXT,
+            image_path TEXT NOT NULL,
+            image_bytes INTEGER NOT NULL,
+            ocr_text TEXT,
+            ocr_sec REAL,
+            a11y_text TEXT,
+            a11y_json TEXT,
+            ocr_engine TEXT
+        );
+        INSERT INTO frames_v2 (id, ts, monitor, workspace, window_class,
+            window_title, fullscreen, trigger, image_path, image_bytes,
+            ocr_text, ocr_sec, a11y_text, a11y_json, ocr_engine)
+        SELECT id, ts, monitor, workspace, window_class, window_title,
+            fullscreen, trigger, image_path, image_bytes,
+            ocr_text, ocr_sec, a11y_text, a11y_json, ocr_engine FROM frames;
+        DROP TABLE frames;
+        ALTER TABLE frames_v2 RENAME TO frames;
+        CREATE INDEX IF NOT EXISTS idx_frames_ts ON frames(ts);
+        CREATE INDEX IF NOT EXISTS idx_frames_class_ts ON frames(window_class, ts);
+        CREATE INDEX IF NOT EXISTS idx_frames_trigger ON frames(trigger);
+        """
+    )
 
 
 class Database:
@@ -417,6 +472,44 @@ class Database:
             )
             conn.commit()
             return cur.lastrowid
+
+    def insert_live_session(self, player: str, media_title, media_source, media_id, *,
+                            ts_start: int, pos_start: int, length: int,
+                            ranges: list) -> int:
+        """Open row for an in-progress session: live=1, ts_end=0, pos_end mirrors
+        the starting position. `ranges` holds only the segments closed so far."""
+        with self._lock, self.conn() as conn:
+            cur = conn.execute(
+                "INSERT INTO watch_sessions (player, media_title, media_source, media_id,"
+                " ts_start, ts_end, pos_start, pos_end, length, ranges, live)"
+                " VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?, 1)",
+                (player, media_title, media_source, media_id, ts_start,
+                 pos_start, pos_start, length, json.dumps(ranges)),
+            )
+            conn.commit()
+            return cur.lastrowid
+
+    def update_live_session(self, row_id: int, *, ts_end: int, pos_end: int,
+                            ranges: list) -> None:
+        """Refresh an in-progress row (polls and follow lines); live rows only."""
+        with self._lock, self.conn() as conn:
+            conn.execute(
+                "UPDATE watch_sessions SET ts_end = ?, pos_end = ?, ranges = ?"
+                " WHERE id = ? AND live = 1",
+                (ts_end, pos_end, json.dumps(ranges), row_id),
+            )
+            conn.commit()
+
+    def finalize_live_session(self, row_id: int, *, ts_end: int, pos_end: int,
+                              ranges: list) -> None:
+        """Close an in-progress row in place: live=0 with the final values."""
+        with self._lock, self.conn() as conn:
+            conn.execute(
+                "UPDATE watch_sessions SET live = 0, ts_end = ?, pos_end = ?, ranges = ?"
+                " WHERE id = ?",
+                (ts_end, pos_end, json.dumps(ranges), row_id),
+            )
+            conn.commit()
 
     def list_watch_sessions(self, *, player: str | None = None, start: int | None = None,
                             end: int | None = None, limit: int = 20,

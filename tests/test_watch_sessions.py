@@ -149,46 +149,100 @@ def test_follow_lines_drive_session_persistence(tmp_path):
     assert session["ts_start"] <= session["ts_end"]
 
 
-def test_mid_play_track_switch_closes_and_reopens(tmp_path):
-    """A different title while playing ends the old session and opens a new one
-    (MPRIS emits no stopped between tracks)."""
+def test_mid_play_track_switch_finalizes_old_and_opens_new_live_row(tmp_path):
+    """A different title while playing finalizes the old live row and opens a
+    new live one (MPRIS emits no stopped between tracks)."""
     daemon = _daemon(tmp_path, _FakeWatchTools())
     daemon._on_track(VLC_LINE)
     daemon._on_track("Playing|Hans Zimmer|Time||vlc|1500000000|7200000000|file:///mnt/movies/Inception.mkv")
 
     total, items = daemon.db.list_watch_sessions()
-    assert total == 1  # the old "Inception (2010)" session, closed at the switch
-    assert items[0]["media_title"] == "Inception (2010)"
+    assert total == 2  # the old "Inception (2010)" row finalized, "Time" live
+    by_live = {it["live"]: it for it in items}
+    old, new = by_live[0], by_live[1]
+    assert old["media_title"] == "Inception (2010)"
+    assert old["pos_end"] == 0  # position unknown at a mid-play switch
+    assert old["ranges"] == [[900_000_000, 900_000_000]]
+    assert new["media_title"] == "Time"
+    assert new["live"] == 1
+    assert new["ts_end"] == 0
     assert len(daemon.tracker.open_sessions()) == 1  # "Time" still open
 
 
 def test_watch_poll_persists_on_player_exit(tmp_path):
-    """A player that vanishes from `playerctl -l` closes its session."""
+    """A player that vanishes from `playerctl -l` closes + finalizes its session."""
     tools = _FakeWatchTools(players=["vlc"])
     daemon = _daemon(tmp_path, tools)
     daemon._on_track(VLC_LINE)
+    assert daemon.db.list_watch_sessions()[0] == 1
     tools.players = []
     daemon._watch_poll_once()
 
     total, items = daemon.db.list_watch_sessions()
     assert total == 1
+    assert items[0]["live"] == 0
     assert items[0]["pos_end"] == 0  # unknown position at exit
     assert items[0]["ranges"] == [[900_000_000, 900_000_000]]
+    assert daemon._live_rows == {}
 
 
-def test_watch_poll_records_position_for_later_close(tmp_path):
-    """The 30s poll updates the last known position, so a later close keeps the
-    full watched range even when MPRIS reports position 0 on stop."""
+def test_watch_poll_updates_live_row_for_later_close(tmp_path):
+    """The 30s poll updates the live row's last known position, so a later
+    close keeps the full watched range even when MPRIS reports position 0."""
     tools = _FakeWatchTools(players=["vlc"], position=910_000_000)
     daemon = _daemon(tmp_path, tools)
     daemon._on_track(VLC_LINE)
+    total, items = daemon.db.list_watch_sessions()
+    assert total == 1
+    assert items[0]["live"] == 1  # open session persisted as a live row
+    row_id = items[0]["id"]
+
     daemon._watch_poll_once()  # still playing -> no close, position recorded
-    assert daemon.db.list_watch_sessions()[0] == 0
+    total, items = daemon.db.list_watch_sessions()
+    assert total == 1
+    assert items[0]["id"] == row_id  # updated in place, not re-inserted
+    assert items[0]["live"] == 1
+    assert items[0]["pos_end"] == 910_000_000
+    assert items[0]["ranges"] == []  # only closed ranges persist while live
 
     daemon._on_track(STOPPED_VLC)
     total, items = daemon.db.list_watch_sessions()
     assert total == 1
+    assert items[0]["live"] == 0
     assert items[0]["ranges"] == [[900_000_000, 910_000_000]]
+
+
+def test_open_session_is_persisted_as_live_row(tmp_path):
+    """Playing opens a watch_sessions row immediately (live=1, ts_end=0)."""
+    daemon = _daemon(tmp_path, _FakeWatchTools())
+    daemon._on_track(VLC_LINE)
+    total, items = daemon.db.list_watch_sessions()
+    assert total == 1
+    item = items[0]
+    assert item["live"] == 1
+    assert item["ts_end"] == 0
+    assert item["pos_start"] == 900_000_000
+    assert item["pos_end"] == 900_000_000
+    assert item["player"] == "vlc"
+    assert item["media_title"] == "Inception (2010)"
+    assert item["media_source"] == "file:///mnt/movies/Inception.mkv"
+    assert item["ranges"] == []  # only closed ranges are persisted while live
+    assert daemon._live_rows == {"vlc": item["id"]}
+
+
+def test_stop_finalizes_live_row(tmp_path):
+    """A stopped line (position 0) finalizes the live row in place."""
+    daemon = _daemon(tmp_path, _FakeWatchTools())
+    daemon._on_track(VLC_LINE)
+    daemon._on_track(STOPPED_VLC)
+    total, items = daemon.db.list_watch_sessions()
+    assert total == 1
+    item = items[0]
+    assert item["live"] == 0
+    assert item["pos_end"] == 0  # MPRIS reports position 0 on stop
+    assert item["ranges"] == [[900_000_000, 900_000_000]]
+    assert item["ts_end"] >= item["ts_start"]
+    assert daemon._live_rows == {}
 
 
 def test_pause_over_threshold_closes_via_poll(tmp_path):

@@ -180,6 +180,7 @@ class CaptureDaemon:
         self._last_track: tuple | None = None
         self._last_track_status: str | None = None
         self.tracker = SessionTracker(pause_ends_session_s=config.watch.pause_ends_session_s)
+        self._live_rows: dict[str, int] = {}  # player -> watch_sessions row id
         self.events_q: queue.Queue[str] = queue.Queue()
         self.jobs: queue.Queue[Job] = queue.Queue()
         self.extract_jobs: queue.Queue[ExtractJob] = queue.Queue()
@@ -294,6 +295,32 @@ class CaptureDaemon:
         else:
             closed = self.tracker.stop(player, parsed["position_us"], now_ms) if parsed["position_us"] > 0 else self.tracker.exit(player, now_ms)
             self._persist_session(closed)
+        self._sync_live_rows(now_ms)
+
+    def _sync_live_rows(self, now_ms: int) -> None:
+        """Keep watch_sessions live rows in sync with the tracker snapshot.
+
+        Runs after every follow line and poll tick: opens a row the first time
+        a player is seen, updates it on every later sighting, and forgets
+        players whose session closed (the close path already finalized them).
+        """
+        snaps = self.tracker.snapshot()
+        seen: set[str] = set()
+        for s in snaps:
+            seen.add(s.player)
+            row_id = self._live_rows.get(s.player)
+            if row_id is None:
+                self._live_rows[s.player] = self.db.insert_live_session(
+                    s.player, s.media_title, s.media_source, s.media_id,
+                    ts_start=s.ts_start, pos_start=s.pos_start,
+                    length=s.length, ranges=s.ranges,
+                )
+            else:
+                self.db.update_live_session(
+                    row_id, ts_end=now_ms, pos_end=s.last_pos_us, ranges=s.ranges,
+                )
+        for player in [p for p in self._live_rows if p not in seen]:
+            del self._live_rows[player]
 
     def _watch_poll(self) -> None:
         """Poll open players every watch.poll_interval_s: refresh position (seek
@@ -315,9 +342,20 @@ class CaptureDaemon:
             if position_us is None:
                 continue
             self._persist_session(self.tracker.poll(player, position_us, now_ms))
+        self._sync_live_rows(now_ms)
 
     def _persist_session(self, closed: Optional[WatchSession]) -> None:
-        if closed is not None:
+        if closed is None:
+            return
+        row_id = self._live_rows.pop(closed.player, None)
+        if row_id is not None:
+            self.db.finalize_live_session(
+                row_id,
+                ts_end=closed.ts_end,
+                pos_end=closed.pos_end,
+                ranges=closed.ranges,
+            )
+        else:
             self.db.insert_watch_session(closed)
 
     def _capture_worker(self) -> None:

@@ -322,6 +322,34 @@ def test_sessions_preview_page(api_client: TestClient):
     assert "/sessions" in r.text
 
 
+def test_sessions_live_row_renders_null_ts_end(api_client: TestClient, db):
+    """An in-progress session is exposed as live: 1 with ts_end: null (#35+)."""
+    db.insert_live_session(
+        "vlc", "Inception (2010)", "file:///mnt/movies/Inception.mkv", None,
+        ts_start=1_000, pos_start=600_000_000, length=7_200_000_000,
+        ranges=[[600_000_000, 630_000_000]],
+    )
+    body = api_client.get("/sessions").json()
+    item = body["items"][0]
+    assert item["live"] == 1
+    assert item["ts_end"] is None
+    assert datetime.fromisoformat(item["ts_start"]).tzinfo is not None
+
+
+def test_sessions_preview_marks_live_rows(api_client: TestClient, db):
+    """The preview shows live rows with a watching badge and a live/finished
+    meta line instead of a bare session count (#35+)."""
+    _insert_session(db)  # a finished session
+    db.insert_live_session(
+        "sidra", "Awake", None, None,
+        ts_start=2_000, pos_start=0, length=600_000_000, ranges=[],
+    )
+    r = api_client.get("/")
+    assert "● watching" in r.text  # live-row badge in the row template
+    assert " live · " in r.text  # meta counts live vs finished
+    assert " finished — auto-refresh 5s" in r.text
+
+
 # ---- /status ----
 
 def test_status(api_client: TestClient):
