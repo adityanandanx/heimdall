@@ -98,6 +98,28 @@ def test_pick_page_targets_matches_window_title():
     assert picked == [PAGE_A]  # service workers are never page candidates
 
 
+def test_pick_page_targets_prefix_matches_site_suffix():
+    """Chrome's MPRIS title is the bare media title; the CDP page title carries
+    the ` - YouTube` suffix, so a prefix match is the fallback."""
+    bare = "LIVE: The /wayfinder Demo"
+    yt = _page(title=f"{bare} - YouTube", url=YT_URL)
+    clip = _page(title=f"{bare} clip", url="https://example.com/clip")
+    other = _page(title="Something else", url="https://example.com/x")
+    picked = cdp.pick_page_targets([clip, other, yt], bare)
+    assert picked == [yt, clip]  # both prefix; youtube watch pages first
+
+
+def test_pick_page_targets_exact_wins_over_prefix():
+    """An exact title match outranks prefix matches from other tabs."""
+    exact = _page(title=TITLE, url=YT_URL)
+    prefixed = _page(title=f"{TITLE} (extra)", url=YT_URL)
+    assert cdp.pick_page_targets([prefixed, exact], TITLE) == [exact, prefixed]
+
+
+def test_pick_page_targets_empty_title_matches_nothing():
+    assert cdp.pick_page_targets([PAGE_A], "") == []
+
+
 def test_pick_page_targets_prefers_youtube_watch():
     other = _page(title=TITLE, url="https://example.com/stream")
     targets = [other, PAGE_A]
@@ -138,6 +160,22 @@ def test_resolve_media_returns_url_and_id():
     )
     assert resolved == {"media_source": YT_URL, "media_id": YT_ID,
                         "current_us": 900_000_000}
+
+
+def test_resolve_media_prefix_title_resolves():
+    """The MPRIS bare title matches a page whose CDP title carries the site
+    suffix; the position double-check confirms the right tab."""
+    bare = "LIVE: The /wayfinder Demo"
+    page = _page(targetId="LIVE_TAB", title=f"{bare} - YouTube", url=YT_URL)
+    connect, get_targets, evaluate = _fake_transport(
+        [page], {"LIVE_TAB": {"href": YT_URL, "current": 1519.724514}})
+    resolved = cdp.resolve_media(
+        "ws://x", bare, mpris_pos_us=1_519_724_521,
+        connect=connect, get_targets=get_targets, evaluate=evaluate,
+    )
+    assert resolved["media_source"] == YT_URL
+    assert resolved["media_id"] == YT_ID
+    assert resolved["current_us"] == 1_519_724_514
 
 
 def test_resolve_media_skips_misaligned_tab_for_matching_one():

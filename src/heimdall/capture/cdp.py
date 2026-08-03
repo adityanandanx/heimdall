@@ -87,14 +87,33 @@ def is_youtube_url(url: str) -> bool:
     return host == "youtu.be" or host.endswith("youtube.com")
 
 
+def _page_title(target: dict) -> str:
+    return (target.get("title") or "").strip()
+
+
 def pick_page_targets(targets: list[dict], window_title: str) -> list[dict]:
-    """Page targets whose title matches the MPRIS window title, YouTube watch
-    pages first (a second tab can share the title)."""
+    """Page targets matching the MPRIS window title, most specific first.
+
+    Chrome's MPRIS `xesam:title` is the bare media title without the site
+    suffix, so an exact title match is preferred and a prefix match
+    (``... - YouTube``) is the fallback; YouTube watch pages sort first within
+    each group. The caller's position check disambiguates same-title tabs.
+    """
+    wanted = (window_title or "").strip()
     pages = [t for t in targets if (t.get("type") or "").lower() == "page"]
-    matches = [t for t in pages if (t.get("title") or "") == window_title]
+
+    def score(t: dict) -> int:
+        title = _page_title(t)
+        if title == wanted:
+            return 0
+        if wanted and title.startswith(wanted):
+            return 1
+        return 2
+
+    matches = [t for t in pages if score(t) < 2]
     return sorted(
         matches,
-        key=lambda t: 0 if is_youtube_url(t.get("url") or "") else 1,
+        key=lambda t: (score(t), 0 if is_youtube_url(t.get("url") or "") else 1),
     )
 
 
@@ -185,7 +204,7 @@ def resolve_media(ws_url: str, window_title: str, *,
                   connect: Optional[Callable] = None,
                   get_targets: Optional[Callable] = None,
                   evaluate: Optional[Callable] = None,
-                  timeout: float = 2.0,
+                  timeout: float = 8.0,
                   tolerance_us: int = ALIGN_TOLERANCE_US) -> Optional[dict]:
     """Resolve ``{media_source, media_id, current_us}`` for the window, or
     None when CDP is unreachable / no tab matches / nothing aligns.
@@ -236,7 +255,7 @@ def resolve_chromium_media(*, window_title: str,
                            connect: Optional[Callable] = None,
                            get_targets: Optional[Callable] = None,
                            evaluate: Optional[Callable] = None,
-                           timeout: float = 2.0,
+                           timeout: float = 8.0,
                            tolerance_us: int = ALIGN_TOLERANCE_US) -> Optional[dict]:
     """Resolve the media for a Chromium watch-session from DevToolsActivePort.
 
