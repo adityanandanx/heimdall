@@ -51,15 +51,18 @@ class ApiClient:
             raise ApiError(r.status_code, str(detail))
         return r.json()
 
+    def _params(self, params: dict | None) -> dict | None:
+        return {k: v for k, v in (params or {}).items() if v is not None} or None
+
     def get(self, path: str, params: dict | None = None) -> dict:
         try:
-            return self._check(self._client.get(path, params=params))
+            return self._check(self._client.get(path, params=self._params(params)))
         except httpx.TransportError as exc:
             raise ApiError(0, _unreachable(self._client.base_url, exc))
 
     def post(self, path: str, params: dict | None = None) -> dict:
         try:
-            return self._check(self._client.post(path, params=params))
+            return self._check(self._client.post(path, params=self._params(params)))
         except httpx.TransportError as exc:
             raise ApiError(0, _unreachable(self._client.base_url, exc))
 
