@@ -34,7 +34,7 @@ class CaptureConfig:
     debounce_s: float = 1.5
     min_interval_s: float = 10
     keepalive_min: float = 5
-    ocr_workers: int = 1
+    extract_workers: int = 1
     extraction: str = "auto"  # auto|a11y|ocr; auto = content-bearing test, a11y wins, else NULL (rapid in #34)
 
 
@@ -126,12 +126,12 @@ def load_config(path: str | None = None) -> Config:
     if "capture" in raw:
         cap = raw["capture"] or {}
         _warn_unknown("capture", {"debounce_s", "min_interval_s", "keepalive_min",
-                                  "ocr_workers", "extraction"}, cap)
+                                  "extract_workers", "extraction"}, cap)
         cfg.capture = CaptureConfig(
             debounce_s=float(_scalar("debounce_s", cap, cfg.capture.debounce_s)),
             min_interval_s=float(_scalar("min_interval_s", cap, cfg.capture.min_interval_s)),
             keepalive_min=float(_scalar("keepalive_min", cap, cfg.capture.keepalive_min)),
-            ocr_workers=int(_scalar("ocr_workers", cap, cfg.capture.ocr_workers)),
+            extract_workers=int(_scalar("extract_workers", cap, cfg.capture.extract_workers)),
             extraction=_scalar("extraction", cap, cfg.capture.extraction),
         )
     if "scheduler" in raw:

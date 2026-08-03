@@ -14,6 +14,34 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterable
 
+# The FTS table + sync triggers alone, so the v2 migration can drop/recreate
+# them against an existing v1 frames table after the ALTER TABLE. SCHEMA
+# composes this so the two can never drift.
+FTS_SCHEMA = """
+CREATE VIRTUAL TABLE IF NOT EXISTS frames_fts USING fts5(
+    a11y_text, ocr_text, window_title, window_class,
+    content='frames', content_rowid='id',
+    tokenize='porter unicode61'
+);
+
+CREATE TRIGGER IF NOT EXISTS frames_ai AFTER INSERT ON frames BEGIN
+    INSERT INTO frames_fts(rowid, a11y_text, ocr_text, window_title, window_class)
+    VALUES (new.id, new.a11y_text, new.ocr_text, new.window_title, new.window_class);
+END;
+
+CREATE TRIGGER IF NOT EXISTS frames_ad AFTER DELETE ON frames BEGIN
+    INSERT INTO frames_fts(frames_fts, rowid, a11y_text, ocr_text, window_title, window_class)
+    VALUES ('delete', old.id, old.a11y_text, old.ocr_text, old.window_title, old.window_class);
+END;
+
+CREATE TRIGGER IF NOT EXISTS frames_au AFTER UPDATE ON frames BEGIN
+    INSERT INTO frames_fts(frames_fts, rowid, a11y_text, ocr_text, window_title, window_class)
+    VALUES ('delete', old.id, old.a11y_text, old.ocr_text, old.window_title, old.window_class);
+    INSERT INTO frames_fts(rowid, a11y_text, ocr_text, window_title, window_class)
+    VALUES (new.id, new.a11y_text, new.ocr_text, new.window_title, new.window_class);
+END;
+"""
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS frames (
     id INTEGER PRIMARY KEY,
@@ -47,61 +75,11 @@ CREATE TABLE IF NOT EXISTS events (
     raw TEXT NOT NULL
 );
 
-CREATE VIRTUAL TABLE IF NOT EXISTS frames_fts USING fts5(
-    a11y_text, ocr_text, window_title, window_class,
-    content='frames', content_rowid='id',
-    tokenize='porter unicode61'
-);
-
-CREATE TRIGGER IF NOT EXISTS frames_ai AFTER INSERT ON frames BEGIN
-    INSERT INTO frames_fts(rowid, a11y_text, ocr_text, window_title, window_class)
-    VALUES (new.id, new.a11y_text, new.ocr_text, new.window_title, new.window_class);
-END;
-
-CREATE TRIGGER IF NOT EXISTS frames_ad AFTER DELETE ON frames BEGIN
-    INSERT INTO frames_fts(frames_fts, rowid, a11y_text, ocr_text, window_title, window_class)
-    VALUES ('delete', old.id, old.a11y_text, old.ocr_text, old.window_title, old.window_class);
-END;
-
-CREATE TRIGGER IF NOT EXISTS frames_au AFTER UPDATE ON frames BEGIN
-    INSERT INTO frames_fts(frames_fts, rowid, a11y_text, ocr_text, window_title, window_class)
-    VALUES ('delete', old.id, old.a11y_text, old.ocr_text, old.window_title, old.window_class);
-    INSERT INTO frames_fts(rowid, a11y_text, ocr_text, window_title, window_class)
-    VALUES (new.id, new.a11y_text, new.ocr_text, new.window_title, new.window_class);
-END;
-
 CREATE INDEX IF NOT EXISTS idx_frames_ts ON frames(ts);
 CREATE INDEX IF NOT EXISTS idx_frames_class_ts ON frames(window_class, ts);
 CREATE INDEX IF NOT EXISTS idx_frames_trigger ON frames(trigger);
 CREATE INDEX IF NOT EXISTS idx_tracks_ts ON tracks(ts);
-"""
-
-# The FTS table + sync triggers alone, so the v2 migration can drop/recreate
-# them against an existing v1 frames table after the ALTER TABLE.
-FTS_SCHEMA = """
-CREATE VIRTUAL TABLE IF NOT EXISTS frames_fts USING fts5(
-    a11y_text, ocr_text, window_title, window_class,
-    content='frames', content_rowid='id',
-    tokenize='porter unicode61'
-);
-
-CREATE TRIGGER IF NOT EXISTS frames_ai AFTER INSERT ON frames BEGIN
-    INSERT INTO frames_fts(rowid, a11y_text, ocr_text, window_title, window_class)
-    VALUES (new.id, new.a11y_text, new.ocr_text, new.window_title, new.window_class);
-END;
-
-CREATE TRIGGER IF NOT EXISTS frames_ad AFTER DELETE ON frames BEGIN
-    INSERT INTO frames_fts(frames_fts, rowid, a11y_text, ocr_text, window_title, window_class)
-    VALUES ('delete', old.id, old.a11y_text, old.ocr_text, old.window_title, old.window_class);
-END;
-
-CREATE TRIGGER IF NOT EXISTS frames_au AFTER UPDATE ON frames BEGIN
-    INSERT INTO frames_fts(frames_fts, rowid, a11y_text, ocr_text, window_title, window_class)
-    VALUES ('delete', old.id, old.a11y_text, old.ocr_text, old.window_title, old.window_class);
-    INSERT INTO frames_fts(rowid, a11y_text, ocr_text, window_title, window_class)
-    VALUES (new.id, new.a11y_text, new.ocr_text, new.window_title, new.window_class);
-END;
-"""
+""" + FTS_SCHEMA
 
 FRAME_COLS = (
     "id", "ts", "monitor", "workspace", "window_class", "window_title",

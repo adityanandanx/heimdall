@@ -1,10 +1,12 @@
 """Event-driven capture daemon.
 
-Threads: socket2 listener -> debouncer -> capture workers -> OCR workers, plus
-a keepalive timer, an MPRIS follower and a heartbeat. grim/tesseract/hyprctl/
-playerctl/socket2 all sit behind `CaptureTools` so the rest is plain wiring.
+Threads: socket2 listener -> debouncer -> capture workers -> extraction
+workers, plus a keepalive timer, an MPRIS follower and a heartbeat.
+grim/hyprctl/playerctl/socket2 and the AT-SPI reader all sit behind
+`CaptureTools` so the rest is plain wiring.
 
-Not unit-tested (the pure decision logic lives in events.py / spans.py).
+Not unit-tested (the pure decision logic lives in events.py / spans.py /
+a11y.py).
 """
 
 from __future__ import annotations
@@ -30,6 +32,7 @@ log = logging.getLogger("heimdall.capture")
 
 Trigger = str
 Job = tuple[str, int]  # (trigger, ts_ms)
+ExtractJob = tuple[int, str, str, bytes]  # (frame_id, window_class, window_title, image)
 
 
 @dataclass
@@ -149,7 +152,7 @@ class CaptureDaemon:
         self._last_track_status: str | None = None
         self.events_q: queue.Queue[str] = queue.Queue()
         self.jobs: queue.Queue[Job] = queue.Queue()
-        self.extract_jobs: queue.Queue[tuple[int, str, str, bytes]] = queue.Queue()
+        self.extract_jobs: queue.Queue[ExtractJob] = queue.Queue()
         self._threads: list[threading.Thread] = []
 
     # ---- threads ----
@@ -340,11 +343,11 @@ class CaptureDaemon:
         ]
         threads += [
             threading.Thread(target=self._capture_worker, name=f"capture-{i}", daemon=True)
-            for i in range(max(1, self.config.capture.ocr_workers))
+            for i in range(max(1, self.config.capture.extract_workers))
         ]
         threads += [
             threading.Thread(target=self._extract_worker, name=f"extract-{i}", daemon=True)
-            for i in range(max(1, self.config.capture.ocr_workers))
+            for i in range(max(1, self.config.capture.extract_workers))
         ]
         self._threads = threads
         for t in threads:

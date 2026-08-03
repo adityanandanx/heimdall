@@ -64,8 +64,10 @@ def build_day_db(db_path: Path, day: str = FIXTURE_DAY) -> Database:
             "ocr_text": ocr,
             "ocr_sec": 4.0 if ocr else None,
             "a11y_text": a11y,
-            "a11y_json": ('[{"role": "document web", "name": "%s", "text": "", "children": []}]' % title)
-            if a11y else None,
+            "a11y_json": json.dumps(
+                [{"role": "document web", "name": title, "text": "", "children": []}],
+                ensure_ascii=False,
+            ) if a11y else None,
             "ocr_engine": None,
         })
     # sidra playing 00:00 -> 10:00 (exact music span = 10 min)
@@ -125,6 +127,25 @@ BREAKDOWN_COMPLETION = {
         {"category": "Job applications", "minutes": 10, "evidence": "linkedin"},
     ],
 }
+
+
+def content_tree() -> list[dict]:
+    """The flagged-Chromium content-bearing tree (prototype #16), shared by the
+    source-routing tests (a11y.py) and the extraction-worker tests (daemon.py)."""
+    return [{
+        "role": "application", "name": "Google Chrome", "text": "", "children": [
+            {"role": "frame", "name": "page - Google Chrome", "text": "", "children": [
+                {"role": "document web", "name": "", "text": "", "children": [
+                    {"role": "heading", "name": "", "text": "Accessibility Test Page"},
+                    {"role": "paragraph", "name": "", "text": "Hello world, the quick brown fox"},
+                    {"role": "link", "name": "Example link", "text": ""},
+                    {"role": "button", "name": "Click me 456", "text": ""},
+                    {"role": "list item", "name": "", "text": "First item"},
+                    {"role": "list item", "name": "", "text": "Second item 789"},
+                ]},
+            ]},
+        ]},
+    ]
 
 
 @pytest.fixture

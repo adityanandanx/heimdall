@@ -3,6 +3,8 @@ dedupe + span-timing computation with crafted sequences."""
 
 from __future__ import annotations
 
+from typing import Callable, Optional
+
 from heimdall.capture.events import (
     activewindow_signature,
     classify_trigger,
@@ -14,6 +16,8 @@ from heimdall.capture.events import (
     workspace_id,
 )
 from heimdall.capture.spans import compute_spans, rules_minutes, spans_to_table, track_playing_ms
+
+from conftest import content_tree
 
 
 # ---- socket2 parsing / classification ----
@@ -189,24 +193,7 @@ def test_spans_to_table_groups_by_window():
 
 # ---- a11y-first extraction (v2 #33) ----
 
-def _content_bearing_tree():
-    return [{
-        "role": "application", "name": "Google Chrome", "text": "", "children": [
-            {"role": "frame", "name": "page - Google Chrome", "text": "", "children": [
-                {"role": "document web", "name": "", "text": "", "children": [
-                    {"role": "heading", "name": "", "text": "Accessibility Test Page"},
-                    {"role": "paragraph", "name": "", "text": "Hello world, the quick brown fox"},
-                    {"role": "link", "name": "Example link", "text": ""},
-                    {"role": "button", "name": "Click me 456", "text": ""},
-                    {"role": "list item", "name": "", "text": "First item"},
-                    {"role": "list item", "name": "", "text": "Second item 789"},
-                ]},
-            ]},
-        ]},
-    ]
-
-
-def _blank_tree():
+def _blank_tree() -> list[dict]:
     """A shell-only tree (unflagged Chromium): no real content nodes."""
     return [{
         "role": "application", "name": "Google Chrome", "text": "", "children": [
@@ -218,7 +205,7 @@ def _blank_tree():
 class _FakeTools:
     """CaptureTools with an injectable a11y reader; no subprocess tools."""
 
-    def __init__(self, reader):
+    def __init__(self, reader: Callable[[str, str], Optional[list]]):
         self.a11y_read = reader
         self.grim = lambda *a: b"jpeg"
         self.activewindow = lambda: {"class": "google-chrome", "title": "page",
@@ -232,7 +219,8 @@ def test_extract_worker_stores_a11y_when_content_bearing(tmp_path):
     from heimdall.config import Config
     from heimdall.db import init_db
 
-    daemon = CaptureDaemon(Config(data_dir=tmp_path), tools=_FakeTools(lambda c, t: _content_bearing_tree()))
+    daemon = CaptureDaemon(Config(data_dir=tmp_path),
+                           tools=_FakeTools(lambda c, t: content_tree()))
     init_db(path=daemon.db_path)
     frame_id = daemon.db.insert_frame(dict(ts=1, monitor=0, workspace=2,
                                            window_class="google-chrome",
@@ -243,7 +231,10 @@ def test_extract_worker_stores_a11y_when_content_bearing(tmp_path):
     daemon.extract_jobs.put(None)
     daemon._extract_worker()
     frame = daemon.db.get_frame(frame_id)
-    assert frame["a11y_text"] == "Accessibility Test Page\nHello world, the quick brown fox\nExample link\nClick me 456\nFirst item\nSecond item 789"
+    assert frame["a11y_text"] == (
+        "Accessibility Test Page\nHello world, the quick brown fox\n"
+        "Example link\nClick me 456\nFirst item\nSecond item 789"
+    )
     assert "document web" in frame["a11y_json"]
     assert frame["ocr_text"] is None
     assert frame["ocr_sec"] is None

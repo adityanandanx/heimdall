@@ -17,29 +17,17 @@ from heimdall.capture.a11y import (
     node_text,
 )
 
+from conftest import content_tree
 
-def node(role, name="", text="", children=()):
+
+def node(role: str, name: str = "", text: str = "", children: tuple = ()) -> dict:
     return {"role": role, "name": name, "text": text, "children": list(children)}
 
 
 # ---- the measured cases (prototype #16) ----
 
 def test_flagged_chromium_tree_is_content_bearing():
-    tree = [node("application", "Google Chrome", children=[
-        node("frame", "a11y throwaway test - Google Chrome", children=[
-            node("document web", "a11y throwaway test", children=[
-                node("heading", "", "Accessibility Test Page"),
-                node("paragraph", "", "Hello world, the quick brown fox jumps over 12345 lazy dogs."),
-                node("link", "Example link"),
-                node("button", "Click me 456"),
-                node("list", children=[
-                    node("list item", "", "First item"),
-                    node("list item", "", "Second item 789"),
-                ]),
-            ]),
-        ]),
-    ])]
-    assert content_bearing(tree) is True
+    assert content_bearing(content_tree()) is True
 
 
 def test_unflagged_chromium_shell_only_is_not_content_bearing():

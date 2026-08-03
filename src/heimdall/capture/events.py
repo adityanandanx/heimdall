@@ -1,7 +1,7 @@
 """Pure event/trigger/debounce logic for the capture daemon (secondary seam).
 
-socket2/grim/tesseract/playerctl stay behind interfaces in daemon.py and are
-not tested; this module holds the testable decision logic.
+socket2/grim/hyprctl/playerctl stay behind interfaces in daemon.py and are not
+tested; this module holds the testable decision logic.
 """
 
 from __future__ import annotations

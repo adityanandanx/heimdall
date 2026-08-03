@@ -8,6 +8,7 @@ untouched; frames_fts is rebuilt to index a11y_text.
 from __future__ import annotations
 
 import sqlite3
+from pathlib import Path
 
 from heimdall.db import Database, init_db
 
@@ -47,7 +48,7 @@ END;
 """
 
 
-def _make_v1_db(path) -> None:
+def _make_v1_db(path: Path) -> None:
     conn = sqlite3.connect(path)
     conn.executescript(V1_SCHEMA)
     conn.execute(
@@ -60,14 +61,14 @@ def _make_v1_db(path) -> None:
     conn.close()
 
 
-def _columns(path, table) -> dict[str, str]:
+def _columns(path: Path, table: str) -> dict[str, str]:
     conn = sqlite3.connect(path)
     rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
     conn.close()
     return {r[1]: r[2] for r in rows}
 
 
-def _fts_ddl(path) -> str:
+def _fts_ddl(path: Path) -> str:
     conn = sqlite3.connect(path)
     sql = conn.execute("SELECT sql FROM sqlite_master WHERE name='frames_fts'").fetchone()[0]
     conn.close()

@@ -40,7 +40,7 @@ Entry point: `heimdall` (CLI), `heimdall serve` (API + scheduler).
 data_dir: ~/.heimdall
 api: {bind: 127.0.0.1, port: 3030}
 llama_server: {base_url: http://127.0.0.1:8080, model: gemma-4-E2B-it-qat-q4_0}
-capture: {debounce_s: 1.5, min_interval_s: 10, keepalive_min: 5, ocr_workers: 1}
+capture: {debounce_s: 1.5, min_interval_s: 10, keepalive_min: 5, extract_workers: 1}
 scheduler: {day_recap: "0 23 * * *", time_breakdown: "5 23 * * *"}
 rules: {window_class_category: {sidra: Music, mpv: Movies}}
 observability: {enabled: true}

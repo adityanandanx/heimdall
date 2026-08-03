@@ -155,7 +155,7 @@ def _walk(node, atspi, depth: int, count: int) -> list[dict]:
     rec = {
         "role": _role_name(node, atspi),
         "name": _node_name(node),
-        "text": _node_text(node),
+        "text": _atspi_text(node),
         "state": _node_states(node, atspi),
         "children": [],
     }
@@ -189,7 +189,9 @@ def _node_name(node) -> str:
         return ""
 
 
-def _node_text(node) -> str:
+def _atspi_text(node) -> str:
+    """Raw AT-SPI text accessor — distinct from the pure `node_text` above,
+    which reads a normalized {role, name, text} dict."""
     try:
         t = node.query_text()
         return t.get_text(0, -1) or ""
