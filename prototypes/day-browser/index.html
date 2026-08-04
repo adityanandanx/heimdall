@@ -216,7 +216,7 @@
   .gridview.show{display:flex}
   .gridhead{display:flex; align-items:center; gap:10px; padding:12px 20px 0}
   .gridlist{flex:1; overflow-y:auto; padding:16px 20px; display:grid; grid-template-columns:repeat(auto-fill, minmax(200px, 1fr)); gap:14px; align-content:start}
-  .griditem{cursor:pointer; border-radius:var(--r-md); overflow:hidden; border:1px solid var(--line); background:var(--surface-2); transition:border-color var(--m-fast), transform var(--m-fast)}
+  .griditem{cursor:pointer; border-radius:var(--r-md); overflow:clip; border:1px solid var(--line); background:var(--surface-2); transition:border-color var(--m-fast), transform var(--m-fast)}
   .griditem:hover{border-color:var(--accent); transform:translateY(-2px)}
   .griditem img{width:100%; aspect-ratio:16/9; object-fit:cover; display:block}
   .griditem .gi-meta{padding:8px 10px}
@@ -242,15 +242,30 @@
   .fs img{max-width:94vw; max-height:94vh; object-fit:contain; border-radius:var(--r-md); box-shadow:var(--e2)}
   .fs .cap{position:absolute; bottom:22px; left:50%; transform:translateX(-50%); background:rgb(8 11 16/.85); border:1px solid var(--line); border-radius:var(--r-pill); padding:7px 16px; font-size:12px; display:flex; gap:12px; align-items:center}
 
-  /* --- capture density strip with session underlay --- */
-  .density{height:14px; margin-top:8px; position:relative}
-  .density .dblocks{position:absolute; inset:0; display:flex; gap:1px}
-  .density .dblock{height:100%; opacity:.4; border-radius:1px; min-width:1px; cursor:pointer; transition:opacity var(--m-fast)}
-  .density .dblock:hover{opacity:.8}
-  .density .dblock.hit{outline:1px solid var(--warn); opacity:.85}
-  .density .dbars{position:absolute; inset:0; display:flex; align-items:flex-end; gap:1px}
-  .density .dbars .b{flex:1; background:var(--accent); opacity:.35; border-radius:1px 1px 0 0}
-  .density .dbars .b.hot{opacity:.9}
+  /* --- parallel watch-session lane (time-linear, synced with the scrubber) --- */
+  .pl{margin-top:10px}
+  .pl-head{display:flex; align-items:center; justify-content:space-between; font-size:10px; font-weight:650;
+    letter-spacing:1px; text-transform:uppercase; color:var(--text-faint); margin-bottom:4px}
+  .pl-legend{display:flex; gap:10px; letter-spacing:0; text-transform:none; font-weight:500}
+  .pl-legend i{display:inline-block; width:8px; height:8px; border-radius:2px; margin-right:4px; vertical-align:-1px}
+  .pl-track{position:relative; height:26px; background:var(--surface-2); border:1px solid var(--line);
+    border-radius:var(--r-md); overflow:hidden; cursor:pointer; touch-action:none}
+  .pl-hours{position:absolute; inset:0; pointer-events:none}
+  .pl-hours div{position:absolute; top:0; bottom:0; width:1px; background:var(--line); opacity:.5}
+  .pl-block{position:absolute; top:2px; bottom:2px; border-radius:4px; opacity:.8; cursor:pointer; overflow:hidden;
+    background:var(--pc,#5b8cff); box-shadow:inset 0 0 0 1px rgb(255 255 255/.07); transition:opacity var(--m-fast)}
+  .pl-block:hover{opacity:1; box-shadow:0 0 0 1.5px var(--text-dim)}
+  .pl-block.active{opacity:1; box-shadow:0 0 0 2px var(--warn)}
+  .pl-block.hit{box-shadow:0 0 0 2px var(--warn)}
+  .pl-block .lbl{display:block; font-size:10px; color:#0b1220; font-weight:650; padding:0 6px; line-height:22px;
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+  .pl-caret{position:absolute; top:-1px; bottom:-1px; width:2px; background:var(--text); opacity:0; pointer-events:none; z-index:3}
+  .pl-caret.show{opacity:.85}
+
+  /* --- capture density strip (capture frequency only) --- */
+  .density{height:14px; margin-top:8px; display:flex; align-items:flex-end; gap:1px}
+  .density .b{flex:1; background:var(--accent); opacity:.35; border-radius:1px 1px 0 0}
+  .density .b.hot{opacity:.9}
 
   /* --- v3: watched strip + media cards --- */
   .sessbar{background:var(--surface); border-top:1px solid var(--line); padding:12px 20px 2px}
@@ -327,6 +342,13 @@
           <div class="caret" id="caret"><span class="pill" id="caretpill"></span></div>
           <div class="playhead" id="playhead"></div>
         </div>
+        <div class="pl">
+          <div class="pl-head">
+            <span>Watch timeline</span>
+            <span class="pl-legend"><i style="background:#ff6b6b"></i>chromium&nbsp;<i style="background:#f0a65b"></i>brave&nbsp;<i style="background:#3ecf8e"></i>sidra</span>
+          </div>
+          <div class="pl-track" id="pltrack"></div>
+        </div>
         <div class="density" id="density"></div>
         <div class="scrubbar">
           <span class="time" id="ctime">–:––</span>
@@ -364,9 +386,10 @@
       Click the strip to jump. <span class="kbd">←</span><span class="kbd">→</span> step one frame.
       Hover or drag to open a frame preview that peeks up from the bar, like a video scrubber.
       Colored bands = apps; dots = captures; <span class="chip dim">hits</span> = your search.
-      The <b>Watched</b> strip and the shaded blocks under the density bar are your media sessions
-      (grouped from 343 player segments). Click any card, block, or ▶ chip to open its transcript
-      with per-segment timings. Search now covers frames <i>and</i> transcripts.
+      The <b>Watch timeline</b> lane is a time-accurate parallel view of your media —
+      <span style="color:#ff9d9d">red</span> chromium, <span style="color:#f0a65b">orange</span> brave,
+      <span style="color:#3ecf8e">green</span> sidra. Click a block to jump the timeline to it
+      and open its transcript; the short bars underneath show capture frequency.
     </p>
   </div>
 </div>
@@ -511,7 +534,7 @@ function paintNowWatch(f){
 }
 function paintSessHits(titles){
   document.querySelectorAll('.sesscard').forEach(c=>c.classList.toggle('hit', !!(titles && titles.has(c.dataset.title))));
-  document.querySelectorAll('.dblock').forEach(b=>b.classList.toggle('hit', !!(titles && titles.has(b.dataset.title))));
+  document.querySelectorAll('.pl-block').forEach(b=>b.classList.toggle('hit', !!(titles && titles.has(b.dataset.title))));
 }
 
 /* ---------- synthesized recap ---------- */
@@ -568,18 +591,46 @@ function applyAppFilter(){
   const bins = new Array(NB).fill(0);
   for(const f of frames) bins[Math.min(Math.floor(fracT(f.ts)*NB), NB-1)]++;
   const max = Math.max(...bins, 1);
-  const blocks = sessions.filter(s=>s.ts0 && s.ts1 && new Date(s.ts1).getTime() > new Date(s.ts0).getTime()).map(s=>{
-    const a = Math.min(Math.max(fracT(s.ts0),0),1), b = Math.min(Math.max(fracT(s.ts1),0),1);
-    if(b-a <= 0) return '';
-    return `<div class="dblock" data-title="${esc(s.title)}" style="left:${(a*100).toFixed(2)}%;width:${Math.max((b-a)*100,.4).toFixed(2)}%;background:${playerColor(s.player)}" title="${esc(s.title)} · ${fmt(s.ts0)}–${fmt(s.ts1)}"></div>`;
+  $('#density').innerHTML = bins.map(n=>
+    `<div class="b" style="height:${Math.max(n? n/max*100 : 4, 4)}%"></div>`).join('');
+})();
+
+/* ---------- parallel watch-session lane (time-linear, synced to the scrubber) ---------- */
+const plTrack = $('#pltrack');
+(function(){
+  const marks=[];
+  const hrs = new Set(frames.map(f=>new Date(f.ts).getHours()));
+  [...hrs].sort((a,b)=>a-b).forEach(h=>{
+    const m=new Date(t0); m.setHours(h,0,0,0);
+    if(m>=new Date(t0)) marks.push(m);
+  });
+  const hours = marks.map(m=>`<div style="left:${(fracT(m)*100).toFixed(2)}%"></div>`).join('');
+  const blocks = media.map(m=>{
+    const a=fracT(new Date(m.first)), b=fracT(new Date(m.last));
+    if(b-a<=0.001) return '';
+    const w=(b-a)*100;
+    return `<div class="pl-block" data-title="${esc(m.title)}" style="left:${(a*100).toFixed(2)}%;width:${Math.max(w,.5).toFixed(2)}%;--pc:${playerColor(m.player)}" title="${esc(m.title)} · ${m.player.split('.')[0]} · ${fmt(m.first)}–${fmt(m.last)} · ${fmtDur(m.watched_s)}"><span class="lbl">${w>3?esc(m.title):''}</span></div>`;
   }).join('');
-  $('#density').innerHTML = `<div class="dblocks">${blocks}</div><div class="dbars">${bins.map(n=>
-    `<div class="b" style="height:${Math.max(n? n/max*100 : 4, 4)}%"></div>`).join('')}</div>`;
-  $('#density').addEventListener('click', e=>{
-    const b = e.target.closest('.dblock');
-    if(b) openSessionByTitle(b.dataset.title);
+  plTrack.innerHTML = `<div class="pl-hours">${hours}</div>${blocks}<div class="pl-caret" id="plcaret"></div>`;
+  plTrack.addEventListener('click', e=>{
+    const b = e.target.closest('.pl-block');
+    if(!b) return;
+    const m = media.find(x=>x.title===b.dataset.title);
+    if(m){ select(frameNear(new Date(m.first))); openSessionByTitle(m.title); }
   });
 })();
+const plCaretEl = $('#plcaret');
+function syncLane(f){
+  const t = new Date(f.ts).getTime();
+  document.querySelectorAll('.pl-block').forEach(b=>{
+    const m = media.find(x=>x.title===b.dataset.title);
+    b.classList.toggle('active', !!(m && new Date(m.first).getTime()<=t && new Date(m.last).getTime()>=t));
+  });
+  if(plCaretEl){
+    plCaretEl.style.left = `${(fracT(f.ts)*100).toFixed(2)}%`;
+    plCaretEl.classList.add('show');
+  }
+}
 
 /* ---------- render scrubber ---------- */
 $('#curdate').textContent = dayStr;
@@ -648,6 +699,7 @@ function select(f, rapid){
     const sess = sessionAt(f.ts);
     const capVid = sess ? `<span class="chip vid">▶ ${esc(sess.title.slice(0,42))}</span>` : '';
     paintNowWatch(f);
+    syncLane(f);
     pimg.classList.add('loading');
     pimg.src = imgOf(f);
     pcap.innerHTML = `<b>${fmt(f.ts)}</b> <span class="muted">${esc(f.window_class)}</span>${capMus}${capVid}`;
