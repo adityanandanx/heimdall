@@ -127,8 +127,8 @@
     border-radius:var(--r-md); overflow:hidden; cursor:pointer; touch-action:none; user-select:none}
   .track .hours{position:absolute; inset:0; pointer-events:none}
   .track .hours div{position:absolute; top:0; bottom:0; width:1px; background:var(--line); opacity:.7}
-  .track .segs{position:absolute; inset:0; display:flex}
-  .track .seg{height:100%; opacity:.6; border-right:1px solid rgb(0 0 0/.3); transition:opacity var(--m-fast)}
+  .track .segs{position:absolute; inset:0}
+  .track .seg{position:absolute; top:0; bottom:0; opacity:.6; border-right:1px solid rgb(0 0 0/.3); transition:opacity var(--m-fast)}
   .track .dots{position:absolute; inset:0; pointer-events:none}
   .track .dot{position:absolute; width:4px; height:4px; border-radius:50%; background:rgb(233 237 245/.55);
     top:50%; transform:translate(-50%,-50%); transition:background var(--m-fast)}
@@ -243,7 +243,10 @@
   .fs .cap{position:absolute; bottom:22px; left:50%; transform:translateX(-50%); background:rgb(8 11 16/.85); border:1px solid var(--line); border-radius:var(--r-pill); padding:7px 16px; font-size:12px; display:flex; gap:12px; align-items:center}
 
   /* --- parallel watch-session lane (time-linear, synced with the scrubber) --- */
-  .pl{margin-top:10px}
+  .tape{overflow-x:auto; overflow-y:hidden; scrollbar-width:thin; margin-top:8px}
+  .tape::-webkit-scrollbar{height:8px}
+  .tape::-webkit-scrollbar-thumb{background:var(--line); border-radius:4px}
+  .canvas{position:relative; min-width:100%}
   .pl-head{display:flex; align-items:center; justify-content:space-between; font-size:10px; font-weight:650;
     letter-spacing:1px; text-transform:uppercase; color:var(--text-faint); margin-bottom:4px}
   .pl-legend{display:flex; gap:10px; letter-spacing:0; text-transform:none; font-weight:500}
@@ -338,20 +341,22 @@
         <div class="sessstrip" id="sessstrip"></div>
       </div>
       <div class="scrubwrap">
-        <div class="ruler" id="ruler"></div>
-        <div class="track" id="track">
-          <div class="hours"></div>
-          <div class="segs" id="segs"></div>
-          <div class="dots" id="dots"></div>
-          <div class="caret" id="caret"><span class="pill" id="caretpill"></span></div>
-          <div class="playhead" id="playhead"></div>
+        <div class="pl-head">
+          <span>Watch timeline</span>
+          <span class="pl-legend"><i style="background:#ff6b6b"></i>chromium&nbsp;<i style="background:#f0a65b"></i>brave&nbsp;<i style="background:#3ecf8e"></i>sidra</span>
         </div>
-        <div class="pl">
-          <div class="pl-head">
-            <span>Watch timeline</span>
-            <span class="pl-legend"><i style="background:#ff6b6b"></i>chromium&nbsp;<i style="background:#f0a65b"></i>brave&nbsp;<i style="background:#3ecf8e"></i>sidra</span>
+        <div class="tape" id="tape">
+          <div class="canvas" id="canvas">
+            <div class="ruler" id="ruler"></div>
+            <div class="track" id="track">
+              <div class="hours"></div>
+              <div class="segs" id="segs"></div>
+              <div class="dots" id="dots"></div>
+              <div class="caret" id="caret"><span class="pill" id="caretpill"></span></div>
+              <div class="playhead" id="playhead"></div>
+            </div>
+            <div class="pl-shell" id="plshell"></div>
           </div>
-          <div class="pl-shell" id="plshell"></div>
         </div>
         <div class="density" id="density"></div>
         <div class="scrubbar">
@@ -389,11 +394,12 @@
     <p class="muted t-sm" style="line-height:1.7">
       Click the strip to jump. <span class="kbd">←</span><span class="kbd">→</span> step one frame.
       Hover or drag to open a frame preview that peeks up from the bar, like a video scrubber.
-      Colored bands = apps; dots = captures; <span class="chip dim">hits</span> = your search.
-      The <b>Watch timeline</b> lane is a time-accurate parallel view of your media —
-      <span style="color:#ff9d9d">red</span> chromium, <span style="color:#f0a65b">orange</span> brave,
-      <span style="color:#3ecf8e">green</span> sidra. Click a block to jump the timeline to it
-      and open its transcript; the short bars underneath show capture frequency.
+      Colored bands = apps; dots = captures; <span class="chip dim">hits</span> = your search —
+      everything sits on a single true time axis, so dots, app bands, and the media blocks line up.
+      Long gaps scroll like an editor: drag the tape sideways and it auto-follows the selected frame.
+      The <b>Watch timeline</b> lane (<span style="color:#ff9d9d">chromium</span>,
+      <span style="color:#f0a65b">brave</span>, <span style="color:#3ecf8e">sidra</span>)
+      mirrors your media; click a block to jump there; the short bars underneath show capture frequency.
     </p>
   </div>
 </div>
@@ -479,7 +485,7 @@ function playingAt(ts){
 }
 const playingStarts = musicSessions;
 const musicBlock = t => t.title || '(untitled)';
-const posOf = f => frames.indexOf(f) / (frames.length - 1) * 100;
+const posOf = f => fracT(new Date(f.ts)) * 100;
 const fracT = ts => (new Date(ts)-new Date(t0))/dur;
 function frameNear(ts){
   let best = frames[0], bd = Infinity;
@@ -601,6 +607,11 @@ function applyAppFilter(){
 
 /* ---------- parallel watch-session lane (time-linear, synced to the scrubber) ---------- */
 const plShell = $('#plshell');
+const tape = $('#tape'), canvasEl = $('#canvas');
+const TAPE_PX_PER_MIN = 5;
+(function(){
+  canvasEl.style.width = Math.max(tape.clientWidth, dur/60000*TAPE_PX_PER_MIN) + 'px';
+})();
 const PL_MAX_ROWS = 5;
 function renderLane(){
   const marks=[];
@@ -676,9 +687,15 @@ const rulerEl = $('#ruler');
 })();
 
 /* colored segment bands (app runs along the capture axis, tiled by frame count) */
-$('#segs').innerHTML = chapters().map(ch=>
-  `<div class="seg" data-app="${esc(ch.cls)}" style="flex:${ch.frames.length} 1 0;background:${clsColor(ch.cls)}" title="${esc(ch.cls)}"></div>`
-).join('');
+$('#segs').innerHTML = (function(){
+  const chs = chapters();
+  return chs.map((ch,i)=>{
+    const a = fracT(new Date(ch.frames[0].ts))*100;
+    const endTs = i+1<chs.length ? new Date(chs[i+1].frames[0].ts) : new Date(ch.frames[ch.frames.length-1].ts);
+    const b = fracT(endTs)*100;
+    return `<div class="seg" data-app="${esc(ch.cls)}" style="left:${a.toFixed(2)}%;width:${Math.max(b-a,.05).toFixed(2)}%;background:${clsColor(ch.cls)}" title="${esc(ch.cls)}"></div>`;
+  }).join('');
+})();
 
 /* capture dots + search hits */
 function paintDots(hits){
@@ -692,6 +709,7 @@ paintDots(null);
 /* ---------- selection state ---------- */
 let sel = frames[frames.length-1];
 let selId = null;         // null forces first render
+let didInit = false;      // first render done (skip initial auto-scroll)
 let hits = null;          // Set of frame ids matching current search
 let query = '';
 
@@ -709,6 +727,13 @@ const warmCache = new Map();   // frame id -> Image (background preload)
 function warm(f){
   if(!f || warmCache.has(f.id)) return;
   const im = new Image(); im.src = imgOf(f); warmCache.set(f.id, im);
+}
+
+function ensurePlayheadInView(f){
+  const x = (posOf(f)/100)*canvasEl.clientWidth;
+  if(x < tape.scrollLeft || x > tape.scrollLeft + tape.clientWidth){
+    tape.scrollLeft = Math.max(0, Math.min(x - tape.clientWidth/3, tape.scrollWidth - tape.clientWidth));
+  }
 }
 
 function select(f, rapid){
@@ -734,9 +759,11 @@ function select(f, rapid){
     const i = frames.findIndex(x=>x.id===f.id);
     warm(frames[i-1]); warm(frames[i+1]);
   }
+  if(changed && didInit && !rapid && !dragging) ensurePlayheadInView(f);
   $('#ctime').textContent = fmtS(f.ts);
   $('#cmeta').textContent = `${f.window_class}${f.window_title?' · '+esc(f.window_title):''}`.slice(0,70);
   $('#playhead').style.left = `${posOf(f)}%`;
+  didInit = true;
 }
 
 /* ---------- scrubber interactions ---------- */
@@ -749,10 +776,9 @@ const PEEK_W = 300;
 
 function frameAtX(clientX){
   const r = track.getBoundingClientRect();
-  const x = Math.min(Math.max(clientX - r.left, 0), r.width);
+  const x = Math.min(Math.max(clientX - r.left + tape.scrollLeft, 0), r.width);
   const ts = new Date(new Date(t0).getTime() + (x/r.width)*dur);
-  const i = Math.round(x / r.width * (frames.length - 1));
-  return {f: frames[Math.min(Math.max(i, 0), frames.length-1)], x, ts};
+  return {f: frameNear(ts), x, ts};
 }
 function seek(clientX){
   const {f} = frameAtX(clientX);
