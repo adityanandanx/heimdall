@@ -164,6 +164,12 @@
   .scrubbar{display:flex; align-items:center; gap:14px; margin-top:12px}
   .scrubbar .time{font-variant-numeric:tabular-nums; font-size:13px; font-weight:650; min-width:96px}
   .scrubbar .range{margin-left:auto; color:var(--text-faint); font-size:11px; font-variant-numeric:tabular-nums}
+  .scrubbar .zoom{display:flex; align-items:center; gap:6px}
+  .scrubbar .zoombtn{cursor:pointer; border:none; background:var(--surface-2); color:var(--text-dim);
+    font-size:14px; line-height:1; width:22px; height:22px; border-radius:6px; border:1px solid var(--line)}
+  .scrubbar .zoombtn:hover{color:var(--text)}
+  .scrubbar .zoom input[type=range]{width:110px; accent-color:var(--accent); cursor:pointer}
+  .scrubbar .zoomval{font-size:10px; color:var(--text-faint); font-variant-numeric:tabular-nums; min-width:46px; text-align:right}
 
   /* --- cards --- */
   .card{background:var(--surface-2); border:1px solid var(--line); border-radius:var(--r-lg); padding:16px}
@@ -369,6 +375,12 @@
         <div class="scrubbar">
           <span class="time" id="ctime">–:––</span>
           <span class="muted t-sm" id="cmeta">drag or click to scrub</span>
+          <span class="zoom" title="stretch the timeline (or scroll over it)">
+            <button class="zoombtn" id="zo" aria-label="zoom out">−</button>
+            <input type="range" id="zoom" min="2" max="120" step="1" value="5" aria-label="zoom">
+            <button class="zoombtn" id="zi" aria-label="zoom in">+</button>
+            <span class="zoomval" id="zoomval"></span>
+          </span>
           <span class="range" id="crange"></span>
         </div>
       </div>
@@ -504,21 +516,22 @@ const fracT = ts => (new Date(ts)-new Date(t0))/dur;   // linear day fraction (g
 /* collapsed time axis: active stretches keep px-per-minute scale; off gaps
    (no captures for > OFF_MIN) compress to a small fixed-width marker, so the
    timeline only shows real activity like a video editor leaves out silence */
-const PPM = 5, GAP_W = 14;
+const GAP_W = 14;
+let ppm = 5;                     // px per active minute (zoom)
 function buildAxis(){
   const spans = [];
   let x = 0;
   for(let i=0;i<frames.length-1;i++){
     const a = new Date(frames[i].ts).getTime(), b = new Date(frames[i+1].ts).getTime();
     const off = b-a > OFF_MIN;
-    const w = off ? GAP_W : (b-a)/60000*PPM;
+    const w = off ? GAP_W : (b-a)/60000*ppm;
     spans.push({a, b, off, x0:x, x1:x+w});
     x += w;
   }
   return spans;
 }
-const axis = buildAxis();
-const AXIS_W = axis[axis.length-1].x1;
+let axis = buildAxis();
+let AXIS_W = axis[axis.length-1].x1;
 function axisOf(ts){
   const t = new Date(ts).getTime();
   let lo=0, hi=axis.length;
@@ -644,21 +657,23 @@ function applyAppFilter(){
 }
 
 /* ---------- capture density (along the collapsed axis, shows where captures cluster) ---------- */
-(function(){
+function renderDensity(){
   const NB = 48;
   const bins = new Array(NB).fill(0);
   for(const f of frames) bins[Math.min(Math.floor(axisOf(f.ts)/AXIS_W*NB), NB-1)]++;
   const max = Math.max(...bins, 1);
   $('#density').innerHTML = bins.map(n=>
     `<div class="b" style="height:${Math.max(n? n/max*100 : 4, 4)}%"></div>`).join('');
-})();
+}
+renderDensity();
 
 /* ---------- parallel watch-session lane (time-linear, synced to the scrubber) ---------- */
 const plShell = $('#plshell');
 const tape = $('#tape'), canvasEl = $('#canvas');
-(function(){
+function fitCanvas(){
   canvasEl.style.width = Math.max(tape.clientWidth, AXIS_W) + 'px';
-})();
+}
+fitCanvas();
 const PL_MAX_ROWS = 5;
 /* contiguous runs of one media/player; a gap > GAP_MIN (laptop off) splits a run */
 const GAP_MIN = 8*60*1000;
@@ -721,13 +736,13 @@ function renderLane(){
     ${extra?`<div class="pl-row"><div class="pl-more">+${extra} more row${extra>1?'s':''} of simultaneous media</div></div>`:''}
     <div class="pl-caret" id="plcaret"></div>`;
   plCaretEl = document.getElementById('plcaret');
-  plShell.addEventListener('click', e=>{
-    const b = e.target.closest('.pl-block');
-    if(!b) return;
-    select(frameNear(new Date(+b.dataset.t)));
-    openSessionByTitle(b.dataset.title);
-  });
 }
+plShell.addEventListener('click', e=>{
+  const b = e.target.closest('.pl-block');
+  if(!b) return;
+  select(frameNear(new Date(+b.dataset.t)));
+  openSessionByTitle(b.dataset.title);
+});
 let plCaretEl = null;
 function syncLane(f){
   const t = new Date(f.ts).getTime();
@@ -746,7 +761,7 @@ renderLane();
 /* ---------- render scrubber ---------- */
 $('#curdate').textContent = dayStr;
 const rulerEl = $('#ruler');
-(function(){
+function renderRuler(){
   const marks=[];
   const hrs = new Set(frames.map(f=>new Date(f.ts).getHours()));
   [...hrs].sort((a,b)=>a-b).forEach(h=>{
@@ -757,12 +772,13 @@ const rulerEl = $('#ruler');
   $('#track .hours').innerHTML = marks.map(m=>`<div style="left:${axisOf(new Date(m)).toFixed(1)}px"></div>`).join('');
   $('#crange').textContent = `${fmt(t0)} – ${fmt(t1)}`;
   $('#off').innerHTML = offMarkup();
-})();
+}
+renderRuler();
 
 /* colored segment bands (app runs along the capture axis, tiled by frame count) */
-$('#segs').innerHTML = (function(){
+function renderSegs(){
   const chs = chapters();
-  return chs.map((ch,i)=>{
+  $('#segs').innerHTML = chs.map((ch,i)=>{
     const a = axisOf(new Date(ch.frames[0].ts));
     /* pad to the next chapter's first frame, but stop at the last frame when
        the laptop was off in between (no captures) so the gap stays open */
@@ -774,7 +790,8 @@ $('#segs').innerHTML = (function(){
     const b = axisOf(endTs);
     return `<div class="seg" data-app="${esc(ch.cls)}" style="left:${a.toFixed(1)}px;width:${Math.max(b-a,1).toFixed(1)}px;background:${clsColor(ch.cls)}" title="${esc(ch.cls)}"></div>`;
   }).join('');
-})();
+}
+renderSegs();
 
 /* capture dots + search hits */
 function paintDots(hits){
@@ -784,6 +801,48 @@ function paintDots(hits){
   }).join('');
 }
 paintDots(null);
+
+/* ---------- zoom / re-layout (stretch the collapsed timeline) ---------- */
+function rebuildAxis(){
+  axis = buildAxis();
+  AXIS_W = axis[axis.length-1].x1;
+  fitCanvas();
+  renderRuler();
+  renderDensity();
+  renderSegs();
+  paintDots(hits);
+  renderLane();
+  $('#playhead').style.left = `${axisOf(sel.ts).toFixed(1)}px`;
+  $('#zoomval').textContent = `${Math.round(ppm)}px/min`;
+}
+function setZoom(v, anchorVp){
+  /* content x under the anchor before the zoom */
+  const oldX = anchorVp!=null ? anchorVp + tape.scrollLeft : tape.scrollLeft + tape.clientWidth/2;
+  /* the span list never reorders on zoom (only widths change), so anchor by
+     span index + local fraction for an exact keep-in-place */
+  let lo=0, hi=axis.length;
+  while(lo<hi){ const mid=(lo+hi)>>1; if(axis[mid].x1<=oldX) lo=mid+1; else hi=mid; }
+  const idx = Math.min(lo, axis.length-1);
+  const s = axis[idx];
+  const f = s.x1-s.x0 ? (oldX-s.x0)/(s.x1-s.x0) : 0;
+  ppm = Math.max(2, Math.min(120, +v||5));
+  $('#zoom').value = ppm;
+  rebuildAxis();
+  const ns = axis[idx];
+  const newX = ns.x0 + f*(ns.x1-ns.x0);
+  const keep = anchorVp!=null ? anchorVp : tape.clientWidth/2;
+  tape.scrollLeft = Math.max(0, Math.min(newX - keep, Math.max(0, AXIS_W - tape.clientWidth)));
+}
+$('#zoom').addEventListener('input', e=>setZoom(+e.target.value));
+$('#zo').addEventListener('click', ()=>setZoom(Math.round(ppm/1.5)));
+$('#zi').addEventListener('click', ()=>setZoom(Math.round(ppm*1.5)));
+$('#zoomval').textContent = `${Math.round(ppm)}px/min`;
+tape.addEventListener('wheel', e=>{
+  if(e.shiftKey) return;   // shift+wheel = horizontal scroll
+  e.preventDefault();
+  const rect = tape.getBoundingClientRect();
+  setZoom(ppm*(e.deltaY<0?1.25:0.8), e.clientX - rect.left);
+}, {passive:false});
 
 /* ---------- selection state ---------- */
 let sel = frames[frames.length-1];
