@@ -248,18 +248,22 @@
     letter-spacing:1px; text-transform:uppercase; color:var(--text-faint); margin-bottom:4px}
   .pl-legend{display:flex; gap:10px; letter-spacing:0; text-transform:none; font-weight:500}
   .pl-legend i{display:inline-block; width:8px; height:8px; border-radius:2px; margin-right:4px; vertical-align:-1px}
-  .pl-track{position:relative; height:26px; background:var(--surface-2); border:1px solid var(--line);
-    border-radius:var(--r-md); overflow:hidden; cursor:pointer; touch-action:none}
+  .pl-shell{position:relative; background:var(--surface-2); border:1px solid var(--line);
+    border-radius:var(--r-md); overflow:hidden; cursor:pointer; touch-action:none; padding:2px 0}
+  .pl-row{position:relative; height:24px}
+  .pl-row + .pl-row{margin-top:2px}
   .pl-hours{position:absolute; inset:0; pointer-events:none}
   .pl-hours div{position:absolute; top:0; bottom:0; width:1px; background:var(--line); opacity:.5}
-  .pl-block{position:absolute; top:2px; bottom:2px; border-radius:4px; opacity:.8; cursor:pointer; overflow:hidden;
+  .pl-block{position:absolute; top:0; bottom:0; border-radius:4px; opacity:.85; cursor:pointer; overflow:hidden;
     background:var(--pc,#5b8cff); box-shadow:inset 0 0 0 1px rgb(255 255 255/.07); transition:opacity var(--m-fast)}
   .pl-block:hover{opacity:1; box-shadow:0 0 0 1.5px var(--text-dim)}
   .pl-block.active{opacity:1; box-shadow:0 0 0 2px var(--warn)}
   .pl-block.hit{box-shadow:0 0 0 2px var(--warn)}
-  .pl-block .lbl{display:block; font-size:10px; color:#0b1220; font-weight:650; padding:0 6px; line-height:22px;
+  .pl-block .lbl{display:block; font-size:10px; color:#0b1220; font-weight:650; padding:0 6px; line-height:24px;
     white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
-  .pl-caret{position:absolute; top:-1px; bottom:-1px; width:2px; background:var(--text); opacity:0; pointer-events:none; z-index:3}
+  .pl-more{height:24px; display:flex; align-items:center; padding:0 10px; font-size:10px; letter-spacing:.5px;
+    text-transform:uppercase; color:var(--text-faint)}
+  .pl-caret{position:absolute; top:0; bottom:0; width:2px; background:var(--text); opacity:0; pointer-events:none; z-index:3}
   .pl-caret.show{opacity:.85}
 
   /* --- capture density strip (capture frequency only) --- */
@@ -347,7 +351,7 @@
             <span>Watch timeline</span>
             <span class="pl-legend"><i style="background:#ff6b6b"></i>chromium&nbsp;<i style="background:#f0a65b"></i>brave&nbsp;<i style="background:#3ecf8e"></i>sidra</span>
           </div>
-          <div class="pl-track" id="pltrack"></div>
+          <div class="pl-shell" id="plshell"></div>
         </div>
         <div class="density" id="density"></div>
         <div class="scrubbar">
@@ -596,8 +600,9 @@ function applyAppFilter(){
 })();
 
 /* ---------- parallel watch-session lane (time-linear, synced to the scrubber) ---------- */
-const plTrack = $('#pltrack');
-(function(){
+const plShell = $('#plshell');
+const PL_MAX_ROWS = 5;
+function renderLane(){
   const marks=[];
   const hrs = new Set(frames.map(f=>new Date(f.ts).getHours()));
   [...hrs].sort((a,b)=>a-b).forEach(h=>{
@@ -605,21 +610,43 @@ const plTrack = $('#pltrack');
     if(m>=new Date(t0)) marks.push(m);
   });
   const hours = marks.map(m=>`<div style="left:${(fracT(m)*100).toFixed(2)}%"></div>`).join('');
-  const blocks = media.map(m=>{
-    const a=fracT(new Date(m.first)), b=fracT(new Date(m.last));
-    if(b-a<=0.001) return '';
-    const w=(b-a)*100;
-    return `<div class="pl-block" data-title="${esc(m.title)}" style="left:${(a*100).toFixed(2)}%;width:${Math.max(w,.5).toFixed(2)}%;--pc:${playerColor(m.player)}" title="${esc(m.title)} · ${m.player.split('.')[0]} · ${fmt(m.first)}–${fmt(m.last)} · ${fmtDur(m.watched_s)}"><span class="lbl">${w>3?esc(m.title):''}</span></div>`;
-  }).join('');
-  plTrack.innerHTML = `<div class="pl-hours">${hours}</div>${blocks}<div class="pl-caret" id="plcaret"></div>`;
-  plTrack.addEventListener('click', e=>{
+
+  /* interval coloring: greedy-sort by start, assign each block to the
+     lowest row whose last block has ended */
+  const spans = media.map(m=>({
+    m,
+    start:new Date(m.first).getTime(),
+    end:new Date(m.last).getTime(),
+    a:fracT(new Date(m.first)),
+    b:fracT(new Date(m.last))
+  })).filter(s=>s.b-s.a>0.001)
+     .sort((x,y)=>x.start-y.start || y.end-x.end);
+  const rows=[], rowEnds=[];
+  for(const s of spans){
+    let ri=rowEnds.findIndex(e=>e<=s.start);
+    if(ri<0){ ri=rows.length; rows.push([]); rowEnds.push(-Infinity); }
+    rowEnds[ri]=s.end;
+    rows[ri].push(s);
+  }
+  const shown=rows.slice(0,PL_MAX_ROWS);
+  const extra=rows.length-shown.length;
+  const rowHtml=shown.map(row=>`
+    <div class="pl-row">${row.map(s=>{
+      const w=(s.b-s.a)*100;
+      return `<div class="pl-block" data-title="${esc(s.m.title)}" style="left:${(s.a*100).toFixed(2)}%;width:${Math.max(w,.5).toFixed(2)}%;--pc:${playerColor(s.m.player)}" title="${esc(s.m.title)} · ${s.m.player.split('.')[0]} · ${fmt(s.m.first)}–${fmt(s.m.last)} · ${fmtDur(s.m.watched_s)}"><span class="lbl">${w>3?esc(s.m.title):''}</span></div>`;
+    }).join('')}</div>`).join('');
+  plShell.innerHTML = `<div class="pl-hours">${hours}</div>${rowHtml}
+    ${extra?`<div class="pl-row"><div class="pl-more">+${extra} more row${extra>1?'s':''} of simultaneous media</div></div>`:''}
+    <div class="pl-caret" id="plcaret"></div>`;
+  plCaretEl = document.getElementById('plcaret');
+  plShell.addEventListener('click', e=>{
     const b = e.target.closest('.pl-block');
     if(!b) return;
     const m = media.find(x=>x.title===b.dataset.title);
     if(m){ select(frameNear(new Date(m.first))); openSessionByTitle(m.title); }
   });
-})();
-const plCaretEl = $('#plcaret');
+}
+let plCaretEl = null;
 function syncLane(f){
   const t = new Date(f.ts).getTime();
   document.querySelectorAll('.pl-block').forEach(b=>{
@@ -631,6 +658,7 @@ function syncLane(f){
     plCaretEl.classList.add('show');
   }
 }
+renderLane();
 
 /* ---------- render scrubber ---------- */
 $('#curdate').textContent = dayStr;
