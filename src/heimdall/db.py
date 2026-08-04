@@ -343,15 +343,16 @@ class Database:
 
     def list_frames(self, *, window_class: str | None = None, trigger: str | None = None,
                     start: int | None = None, end: int | None = None,
-                    limit: int = 20, offset: int = 0) -> tuple[int, list[dict]]:
+                    limit: int = 20, offset: int = 0, desc: bool = False) -> tuple[int, list[dict]]:
         self.query_count += 1
         where, params = self._frame_filters(window_class=window_class, trigger=trigger,
                                             start=start, end=end)
+        order = "ts DESC" if desc else "ts"
         with self._lock, self.conn() as conn:
             total = conn.execute(f"SELECT COUNT(*) FROM frames{where}", params).fetchone()[0]
             rows = conn.execute(
                 f"SELECT {', '.join(FRAME_COLS)} FROM frames{where}"
-                " ORDER BY ts LIMIT ? OFFSET ?",
+                f" ORDER BY {order} LIMIT ? OFFSET ?",
                 (*params, limit, offset),
             ).fetchall()
             items = [dict(r) for r in rows]

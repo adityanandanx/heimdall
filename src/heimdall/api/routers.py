@@ -166,13 +166,14 @@ def list_frames(
     end: str | None = None,
     limit: int = Query(DEFAULT_LIMIT, ge=1),
     offset: int = Query(0, ge=0),
+    order: str = Query("asc", pattern="^(asc|desc)$"),
 ) -> dict:
     limit, offset = _paginate(limit, offset)
     start_ms = _parse_time(start, "start")
     end_ms = _parse_time(end, "end")
     total, items = state.db.list_frames(
         window_class=window_class, trigger=trigger, start=start_ms, end=end_ms,
-        limit=limit, offset=offset,
+        limit=limit, offset=offset, desc=(order == "desc"),
     )
     return {"total": total, "items": _iso(items)}
 
