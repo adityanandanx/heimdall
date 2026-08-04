@@ -280,6 +280,7 @@ class CaptureDaemon:
         self._last_track: tuple | None = None
         self._last_track_status: str | None = None
         self.tracker = SessionTracker(pause_ends_session_s=config.watch.pause_ends_session_s)
+        self._excluded_players = set(config.watch.excluded_players)
         self._live_rows: dict[str, int] = {}  # player -> watch_sessions row id
         self._last_phash: dict[str, str] = {}  # window_class -> phash (change gate, #34)
         self.events_q: queue.Queue[str] = queue.Queue()
@@ -381,6 +382,8 @@ class CaptureDaemon:
         if parsed is None:
             return
         player = parsed["player"]
+        if normalize_player(player) in self._excluded_players:
+            return
         if parsed["status"] == "playing":
             closed = self.tracker.play(
                 player,
