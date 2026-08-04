@@ -48,7 +48,17 @@ def mock_api_transport() -> httpx.MockTransport:
             return httpx.Response(200, json={
                 "server": {"status": "ok", "version": "0.1.0", "uptime_s": 12},
                 "db": {"frames_today": 8, "size_bytes": 4096},
-                "capture": {"alive": True, "last_event_ts": 1785700000000},
+                "capture": {"alive": True, "last_event_ts": 1785700000000,
+                            "extraction": "auto", "ocr_also": ["code"],
+                            "players": [{"name": "mpv", "status": "playing"}]},
+                "media": {"last_session": {"session_id": 2, "player": "vlc",
+                                           "media_title": "Inception (2010)",
+                                           "media_source": "file:///mnt/movies/Inception.mkv",
+                                           "ts_start": 1785700000000, "ts_end": 1785701800000,
+                                           "transcript_source": None}},
+                "asr": {"queued": 1, "running": 0, "failed": 0, "items": [
+                    {"session_id": 2, "status": "queued", "started_at": 1785700000000,
+                     "error": None}]},
                 "llama": {"reachable": True},
                 "tracing": {"enabled": False, "reason": "LANGFUSE_* env vars unset"},
                 "pipes": {"last_runs": {"day-recap": None, "time-breakdown": "2026-08-02T23:05:00+05:30"}},
@@ -167,6 +177,10 @@ def test_status_renders(config_path, capsys):
     assert "server: ok" in out
     assert "8 frames today" in out
     assert "capture: alive" in out
+    assert "extraction: auto (+ocr for: code)" in out
+    assert "players: mpv (playing)" in out
+    assert "last session: Inception (2010) — vlc, ended 1785701800000" in out
+    assert "asr: 1 queued, 0 running, 0 failed" in out
     assert "llama: up" in out
     assert "tracing: off (LANGFUSE_* env vars unset)" in out
     assert "last time-breakdown: 2026-08-02T23:05:00+05:30" in out

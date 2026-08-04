@@ -191,7 +191,8 @@ def _shift(day: str, n: int) -> str:
 
 @app.command("status")
 def status(json_output: bool = typer.Option(False, "--json")) -> None:
-    """Show whether capture/server/llama are up and today's frame count.
+    """Show whether capture/server/llama are up, extraction mode, media
+    players, last session and pending ASR jobs.
 
     This is the down-detector: it talks to the API with a short timeout so a
     missing or wedged server is reported quickly instead of hanging.
@@ -205,6 +206,22 @@ def status(json_output: bool = typer.Option(False, "--json")) -> None:
     print(f"db: {data['db']['frames_today']} frames today, {data['db']['size_bytes']} bytes")
     cap = data["capture"]
     print(f"capture: {'alive' if cap['alive'] else 'DOWN'}")
+    print(f"extraction: {cap['extraction']}"
+          + (f" (+ocr for: {', '.join(cap['ocr_also'])})" if cap["ocr_also"] else ""))
+    players = cap["players"]
+    if players:
+        print("players: "
+              + ", ".join(f"{p['name']} ({p['status']})" for p in players))
+    else:
+        print("players: none (playerctl unavailable or no MPRIS players)")
+    last = data["media"]["last_session"]
+    if last:
+        print(f"last session: {last['media_title']} — {last['player']}, "
+              f"ended {last['ts_end']} (source: {last['media_source'] or 'title-only'})")
+    else:
+        print("last session: none")
+    asr = data["asr"]
+    print(f"asr: {asr['queued']} queued, {asr['running']} running, {asr['failed']} failed")
     print(f"llama: {'up' if data['llama']['reachable'] else 'down'}")
     tr = data["tracing"]
     print(f"tracing: {'ON' if tr['enabled'] else 'off (' + tr['reason'] + ')'}")

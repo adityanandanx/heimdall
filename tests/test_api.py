@@ -560,3 +560,47 @@ def test_status(api_client: TestClient):
     assert body["tracing"]["enabled"] is False
     assert body["tracing"]["reason"] == "LANGFUSE_* env vars unset"
     assert body["pipes"]["last_runs"] == {"day-recap": None, "time-breakdown": None}
+
+
+def test_status_reports_extraction_mode(data_dir):
+    cfg = Config(data_dir=data_dir)
+    cfg.capture.extraction = "a11y"
+    cfg.capture.window_class_merge = {"code": "ocr_also"}
+    app = create_app(cfg, db_path=data_dir / "data.db",
+                     llm_transport=mock_llm_response(RECAP_COMPLETION))
+    with TestClient(app) as client:
+        body = client.get("/status").json()
+    assert body["capture"]["extraction"] == "a11y"
+    assert body["capture"]["ocr_also"] == ["code"]
+
+
+def test_status_media_players_injected(data_dir):
+    cfg = Config(data_dir=data_dir)
+    app = create_app(
+        cfg, db_path=data_dir / "data.db",
+        llm_transport=mock_llm_response(RECAP_COMPLETION),
+        list_players=lambda: [{"name": "mpv", "status": "playing"},
+                              {"name": "chromium", "status": "stopped"}],
+    )
+    with TestClient(app) as client:
+        players = client.get("/status").json()["capture"]["players"]
+    assert players == [{"name": "mpv", "status": "playing"},
+                       {"name": "chromium", "status": "stopped"}]
+
+
+def test_status_last_session_and_asr_pending(api_client, db):
+    from heimdall.capture.sessions import WatchSession
+
+    db.insert_watch_session(WatchSession(
+        player="vlc", media_title="Inception (2010)",
+        media_source="file:///mnt/movies/Inception.mkv", media_id=None,
+        ts_start=1_700_000_000_000, ts_end=1_700_001_000_000,
+        pos_start=0, pos_end=7_200_000_000, length=8_400_000_000, ranges=[[0, 7_200_000_000]],
+    ))
+    body = api_client.get("/status").json()
+    last = body["media"]["last_session"]
+    assert last["media_title"] == "Inception (2010)"
+    assert last["player"] == "vlc"
+    assert last["media_source"] == "file:///mnt/movies/Inception.mkv"
+    assert last["ts_end"] == 1_700_001_000_000
+    assert body["asr"] == {"queued": 0, "running": 0, "failed": 0, "items": []}

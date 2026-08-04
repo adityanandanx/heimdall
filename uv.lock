@@ -309,7 +309,6 @@ source = { editable = "." }
 dependencies = [
     { name = "apscheduler" },
     { name = "fastapi" },
-    { name = "faster-whisper" },
     { name = "httpx" },
     { name = "pygobject" },
     { name = "pyyaml" },
@@ -318,6 +317,11 @@ dependencies = [
     { name = "uvicorn", extra = ["standard"] },
     { name = "websockets" },
     { name = "yt-dlp" },
+]
+
+[package.optional-dependencies]
+asr = [
+    { name = "faster-whisper" },
 ]
 
 [package.dev-dependencies]
@@ -329,7 +333,7 @@ dev = [
 requires-dist = [
     { name = "apscheduler", specifier = ">=3.11.3" },
     { name = "fastapi", specifier = ">=0.141.1" },
-    { name = "faster-whisper", specifier = ">=1.2.1" },
+    { name = "faster-whisper", marker = "extra == 'asr'", specifier = ">=1.2.1" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "pygobject", specifier = ">=3.56.0" },
     { name = "pyyaml", specifier = ">=6.0.3" },
@@ -339,6 +343,7 @@ requires-dist = [
     { name = "websockets", specifier = ">=17.0.1" },
     { name = "yt-dlp", specifier = ">=2026.7.4" },
 ]
+provides-extras = ["asr"]
 
 [package.metadata.requires-dev]
 dev = [{ name = "pytest", specifier = ">=9.1.1" }]

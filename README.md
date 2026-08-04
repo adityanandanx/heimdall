@@ -14,11 +14,15 @@ Gemma 4 QAT model on the Intel Arc Vulkan backend. Nothing leaves the machine.
 - Arch + Hyprland, `grim`, `playerctl`, `/usr/bin/llama-server`
 - Vulkan GPU for the model (`-ngl 99`); see `scripts/start-llama.sh`
 - `uv` for the dev/test toolchain
+- Chromium/Electron must be launched accessibility-enabled (see Ops checklist)
+- `yt-dlp` (pinned in the project venv) for YouTube caption transcripts
+- `ffmpeg` for lazy ASR audio extraction; `faster-whisper` is optional (extra)
 
 ## Install
 
 ```sh
-uv sync
+uv sync                    # core deps + yt-dlp (captions)
+uv sync --extra asr        # + faster-whisper (lazy ASR for subtitle-less VLC files)
 uv build          # or: uv pip install -e .
 ```
 
@@ -78,6 +82,30 @@ exec-once = uv run heimdall serve > ~/.heimdall/logs/serve.log 2>&1
 A crashed capture gaps data until noticed; scheduled pipes only run while
 `serve` is up. Logs are per-terminal stdout/stderr or `~/.heimdall/logs/`.
 
+## Ops checklist (launch prerequisites & installs)
+
+Run once after setup; everything is a plain script, no service manager.
+
+- [ ] **Chromium/Electron accessibility (a11y capture)**: launch the browser with
+  `ACCESSIBILITY_ENABLED=1` and `--force-renderer-accessibility`, e.g.
+  `exec-once = env ACCESSIBILITY_ENABLED=1 chromium --force-renderer-accessibility`
+  (add the flag to your launcher's Exec line for other apps). Without it the a11y
+  tree is empty and the window falls back to OCR.
+- [ ] **Chromium URL resolution**: run `scripts/install-messenger-host.sh`, then
+  load the built extension from `~/.heimdall/extensions/heimdall-messenger` via
+  `chrome://extensions` (Developer mode → Load unpacked). No debug port needed.
+  Only the legacy `watch.media_resolver: cdp` path requires Chrome started with
+  `--remote-debugging-port`.
+- [ ] **yt-dlp venv**: captions need `yt-dlp` (pinned in the project venv via
+  `uv sync`). Verify with `uv run python -c "import yt_dlp"`.
+- [ ] **faster-whisper (optional)**: needed only when local-file (VLC) sessions
+  have no caption track — `uv sync --extra asr`, then the `small` model downloads
+  on first use. Without it, ASR jobs report unavailable and sessions stay
+  title-only.
+- [ ] **ffmpeg**: required for lazy ASR (`/usr/bin/ffmpeg`).
+- [ ] **Autostart**: opt-in, OFF by default — add the `exec-once` lines above
+  only if you want capture + pipes at login.
+
 ## CLI
 
 ```sh
@@ -99,7 +127,9 @@ LLM pass) into `output/time-breakdown-{endday}-{N}d.md`.
 - [ ] `scripts/start-capture.sh` runs; switch windows → wait ~2s → `sqlite3 ~/.heimdall/data.db 'select count(*) from frames;'` grows; a frame's `ocr_text` is populated within ~5s (OCR worker)
 - [ ] play/pause music → `select * from tracks;` rows appear with `playing`/`paused`
 - [ ] `heimdall serve` starts; `curl -s localhost:3030/health` → ok
-- [ ] `heimdall status` shows server ok, capture alive, llama up, today's frame count
+- [ ] `heimdall status` shows server ok, capture alive, llama up, today's frame
+  count, extraction mode (a11y/ocr), alive MPRIS players, the last watch-session
+  and pending ASR jobs
 - [ ] `heimdall search <word-you-saw>` returns a frame with a snippet and score
 - [ ] `heimdall recap yesterday` writes `output/day-recap-YYYY-MM-DD.md` with front matter (`date, range, generated_at, frame_count, trace_url`) and all three sections, no `ValidationError`
 - [ ] `heimdall breakdown --days 2` writes `output/time-breakdown-{endday}-2d.md` with summed minutes per category

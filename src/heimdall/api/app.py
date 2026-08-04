@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
+from typing import Callable
 
 import httpx
 from fastapi import FastAPI
@@ -24,6 +25,7 @@ from heimdall.capture.asr import AsrManager
 
 def create_app(config: Config, *, db_path: str | Path | None = None,
                llm_transport: httpx.AsyncBaseTransport | None = None,
+               list_players: Callable[[], list[dict]] | None = None,
                start_scheduler: bool = False) -> FastAPI:
     data = config.data_path
     db_path = Path(db_path) if db_path else data / "data.db"
@@ -40,6 +42,7 @@ def create_app(config: Config, *, db_path: str | Path | None = None,
     app.state.started = time.time()
     app.state.last_runs: dict[str, str] = {}
     app.state.transport = llm_transport
+    app.state.list_players = list_players
     app.state.asr = AsrManager(config, app.state.db)
 
     app.include_router(health_router)

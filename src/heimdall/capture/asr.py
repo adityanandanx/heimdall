@@ -142,6 +142,25 @@ class AsrManager:
         self._lock = threading.Lock()
         self._jobs: dict[int, dict] = {}
 
+    def pending(self) -> dict:
+        """Snapshot of the job registry for `heimdall status` (#42).
+
+        Queued and running jobs are the "pending" work; a failed job is kept
+        until its next request retries it, so it shows up too.
+        """
+        with self._lock:
+            items = [
+                {"session_id": sid, "status": job["status"],
+                 "started_at": job["started_at"], "error": job.get("error")}
+                for sid, job in sorted(self._jobs.items())
+            ]
+        return {
+            "queued": sum(1 for it in items if it["status"] == "queued"),
+            "running": sum(1 for it in items if it["status"] == "running"),
+            "failed": sum(1 for it in items if it["status"] == "failed"),
+            "items": items,
+        }
+
     def request(self, session_id: int) -> tuple[int, dict]:
         """Resolve one `/sessions/{id}/transcript` call into (status, body)."""
         session = self.db.get_watch_session(session_id)

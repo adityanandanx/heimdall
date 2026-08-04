@@ -7,6 +7,7 @@ All responses are JSON with snake_case fields; errors use FastAPI's
 from __future__ import annotations
 
 import sqlite3
+import subprocess
 import time
 from typing import Any, Literal
 
@@ -233,6 +234,23 @@ def status(state: Any = Depends(_state)) -> dict:
     llama_reachable = _llama_reachable(config.llama_server.base_url, state.transport)
     gate = trace_gate(config.observability.enabled)
 
+    players_fn = getattr(state, "list_players", None) or _list_media_players
+    ocr_also = sorted(config.capture.window_class_merge)
+
+    total, items = state.db.list_watch_sessions(limit=1)
+    last_session = None
+    if items:
+        s = items[0]
+        last_session = {
+            "session_id": s["id"],
+            "player": s["player"],
+            "media_title": s["media_title"],
+            "media_source": s["media_source"],
+            "ts_start": s["ts_start"],
+            "ts_end": s["ts_end"],
+            "transcript_source": s.get("transcript_source"),
+        }
+
     return {
         "server": {
             "status": "ok",
@@ -240,7 +258,15 @@ def status(state: Any = Depends(_state)) -> dict:
             "uptime_s": round(time.time() - state.started),
         },
         "db": {"frames_today": today, "size_bytes": state.db.size_bytes()},
-        "capture": {"alive": alive, "last_event_ts": ts_to_iso(last_event_ms) if last_event_ms else None},
+        "capture": {
+            "alive": alive,
+            "last_event_ts": ts_to_iso(last_event_ms) if last_event_ms else None,
+            "extraction": config.capture.extraction,
+            "ocr_also": ocr_also,
+            "players": players_fn(),
+        },
+        "media": {"last_session": last_session},
+        "asr": state.asr.pending(),
         "llama": {"reachable": llama_reachable},
         "tracing": {"enabled": gate.enabled, "reason": gate.reason},
         "pipes": {"last_runs": {name: state.last_runs.get(name) for name in registered_pipes()}},
@@ -337,6 +363,34 @@ def _capture_status(config: Config, now_ms: int) -> tuple[bool, int | None]:
         return False, None
     grace = config.capture.keepalive_min * 60_000 * 3
     return (now_ms - last_event_ms) < grace, last_event_ms
+
+
+def _list_media_players() -> list[dict]:
+    """MPRIS players currently up via playerctl, with playback status.
+
+    Best-effort: missing playerctl or a hung bus degrades to an empty list so
+    the down-detector never stalls. `create_app(list_players=...)` overrides
+    this seam in tests.
+    """
+    try:
+        r = subprocess.run(["playerctl", "-l"], capture_output=True,
+                           text=True, timeout=3)
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return []
+    names = [line.strip() for line in r.stdout.splitlines() if line.strip()]
+    players: list[dict] = []
+    for name in names:
+        status = "unknown"
+        try:
+            s = subprocess.run(["playerctl", "status", "-p", name],
+                               capture_output=True, text=True, timeout=3)
+            if s.returncode == 0:
+                status = s.stdout.strip().lower() or status
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            pass
+        players.append({"name": name, "status": status})
+    players.sort(key=lambda p: (p["status"] != "playing", p["name"]))
+    return players
 
 
 PREVIEW_HTML = """<!doctype html>

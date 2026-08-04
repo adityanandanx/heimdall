@@ -209,3 +209,20 @@ def test_request_records_failure_then_retries(tmp_path, monkeypatch):
     code, body = mgr.request(1)  # failed -> re-queued on the next request
     assert code == 202
     assert body["job"]["status"] == "queued"
+
+
+def test_pending_snapshot_reports_registry(tmp_path, monkeypatch):
+    """#42: `AsrManager.pending()` is the status seam for pending ASR jobs."""
+    mgr, db, _ = _manager(tmp_path, _session(), monkeypatch)
+    assert mgr.pending() == {"queued": 0, "running": 0, "failed": 0, "items": []}
+
+    monkeypatch.setattr("heimdall.capture.asr.extract_ranges_pcm",
+                        lambda path, ranges: None)
+    mgr.request(1)
+    _wait_until(lambda: mgr._jobs.get(1, {}).get("status") == "failed")
+
+    snap = mgr.pending()
+    assert snap["failed"] == 1 and snap["queued"] == 0 and snap["running"] == 0
+    assert snap["items"] == [{"session_id": 1, "status": "failed",
+                              "started_at": mgr._jobs[1]["started_at"],
+                              "error": mgr._jobs[1]["error"]}]
