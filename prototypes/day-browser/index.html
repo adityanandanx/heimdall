@@ -127,6 +127,8 @@
     border-radius:var(--r-md); overflow:hidden; cursor:pointer; touch-action:none; user-select:none}
   .track .hours{position:absolute; inset:0; pointer-events:none}
   .track .hours div{position:absolute; top:0; bottom:0; width:1px; background:var(--line); opacity:.7}
+  .track .off{position:absolute; inset:0; pointer-events:none}
+  .track .off div{position:absolute; top:0; bottom:0; background:rgb(0 0 0/.38); border-left:1px solid rgb(255 255 255/.07)}
   .track .segs{position:absolute; inset:0}
   .track .seg{position:absolute; top:0; bottom:0; opacity:.6; border-right:1px solid rgb(0 0 0/.3); transition:opacity var(--m-fast)}
   .track .dots{position:absolute; inset:0; pointer-events:none}
@@ -253,6 +255,10 @@
   .pl-legend i{display:inline-block; width:8px; height:8px; border-radius:2px; margin-right:4px; vertical-align:-1px}
   .pl-shell{position:relative; background:var(--surface-2); border:1px solid var(--line);
     border-radius:var(--r-md); overflow:hidden; cursor:pointer; touch-action:none; padding:2px 0}
+  .pl-off{position:absolute; inset:0; pointer-events:none}
+  .pl-off div{position:absolute; top:0; bottom:0;
+    background:repeating-linear-gradient(-45deg, rgb(0 0 0/.3) 0 6px, rgb(0 0 0/.1) 6px 12px);
+    border-left:1px solid rgb(255 255 255/.05)}
   .pl-row{position:relative; height:24px}
   .pl-row + .pl-row{margin-top:2px}
   .pl-hours{position:absolute; inset:0; pointer-events:none}
@@ -349,6 +355,7 @@
           <div class="canvas" id="canvas">
             <div class="ruler" id="ruler"></div>
             <div class="track" id="track">
+              <div class="off" id="off"></div>
               <div class="hours"></div>
               <div class="segs" id="segs"></div>
               <div class="dots" id="dots"></div>
@@ -399,7 +406,9 @@
       Long gaps scroll like an editor: drag the tape sideways and it auto-follows the selected frame.
       The <b>Watch timeline</b> lane (<span style="color:#ff9d9d">chromium</span>,
       <span style="color:#f0a65b">brave</span>, <span style="color:#3ecf8e">sidra</span>)
-      mirrors your media; click a block to jump there; the short bars underneath show capture frequency.
+      mirrors your media as contiguous runs (a gap longer than 5 min splits a run);
+      click a block to jump there; the short bars underneath show capture frequency.
+      Diagonal hatching marks stretches with no captures — laptop off or idle.
     </p>
   </div>
 </div>
@@ -522,7 +531,7 @@ function renderWatched(){
   $('#sessstrip').innerHTML = media.slice(0,14).map(m=>`
     <div class="sesscard" data-title="${esc(m.title)}" style="--pc:${playerColor(m.player)}">
       <div class="sc-top"><span class="sc-play">▶</span><span class="sc-title">${esc(m.title)}</span></div>
-      <div class="sc-meta"><span class="chip">${esc(m.player.split('.')[0])}</span><span>${fmtDur(m.watched_s)}</span><span class="muted">${fmt(m.first)}–${fmt(m.last)}</span></div>
+      <div class="sc-meta"><span class="chip">${esc(m.player.split('.')[0])}</span><span>${fmtDur(m.watched_s)}</span><span class="muted">${(m.n||1)} segment${(m.n||1)>1?'s':''}</span></div>
       ${m.tx?`<div class="sc-tx">${esc(m.tx.slice(0,140))}</div>`:''}
     </div>`).join('') || '<div class="muted t-sm">no media captured this day</div>';
   $('#sessstrip').querySelectorAll('.sesscard').forEach(c=>c.addEventListener('click', ()=>openSessionByTitle(c.dataset.title)));
@@ -613,6 +622,38 @@ const TAPE_PX_PER_MIN = 5;
   canvasEl.style.width = Math.max(tape.clientWidth, dur/60000*TAPE_PX_PER_MIN) + 'px';
 })();
 const PL_MAX_ROWS = 5;
+/* contiguous runs of one media/player; a gap > GAP_MIN (laptop off) splits a run */
+const GAP_MIN = 8*60*1000;
+let runsCache = null;
+function buildRuns(){
+  if(runsCache) return runsCache;
+  const runs=[];
+  const sorted = [...sessions].sort((a,b)=>new Date(a.ts0)-new Date(b.ts0));
+  for(const s of sorted){
+    const st=new Date(s.ts0).getTime();
+    const en=s.ts1?new Date(s.ts1).getTime():st;
+    if(en<st) continue;
+    let hit=null;
+    for(let j=runs.length-1;j>=0;j--){
+      const r=runs[j];
+      if(r.player===s.player && r.title===s.title && st-r.end<=GAP_MIN){ hit=r; break; }
+    }
+    if(hit){ hit.end=Math.max(hit.end,en); hit.watched+=watchedMin(s)*60; }
+    else runs.push({player:s.player, title:s.title, start:st, end:en, watched:watchedMin(s)*60});
+  }
+  return runsCache = runs;
+}
+/* stretches where the laptop captured nothing (no frames), i.e. likely asleep/off */
+function offSpans(){
+  const out=[]; const OFF_MIN=8*60*1000;
+  for(let i=1;i<frames.length;i++){
+    const g=new Date(frames[i].ts)-new Date(frames[i-1].ts);
+    if(g>OFF_MIN) out.push({a:fracT(new Date(frames[i-1].ts))*100, b:fracT(new Date(frames[i].ts))*100});
+  }
+  return out;
+}
+const offMarkup = ()=>offSpans().map(o=>
+  `<div title="no captures — laptop off or idle" style="left:${o.a.toFixed(2)}%;width:${(o.b-o.a).toFixed(2)}%"></div>`).join('');
 function renderLane(){
   const marks=[];
   const hrs = new Set(frames.map(f=>new Date(f.ts).getHours()));
@@ -624,12 +665,9 @@ function renderLane(){
 
   /* interval coloring: greedy-sort by start, assign each block to the
      lowest row whose last block has ended */
-  const spans = media.map(m=>({
-    m,
-    start:new Date(m.first).getTime(),
-    end:new Date(m.last).getTime(),
-    a:fracT(new Date(m.first)),
-    b:fracT(new Date(m.last))
+  const spans = buildRuns().map(r=>({
+    title:r.title, player:r.player, start:r.start, end:r.end, watched:r.watched,
+    a:fracT(new Date(r.start)), b:fracT(new Date(r.end))
   })).filter(s=>s.b-s.a>0.001)
      .sort((x,y)=>x.start-y.start || y.end-x.end);
   const rows=[], rowEnds=[];
@@ -644,25 +682,26 @@ function renderLane(){
   const rowHtml=shown.map(row=>`
     <div class="pl-row">${row.map(s=>{
       const w=(s.b-s.a)*100;
-      return `<div class="pl-block" data-title="${esc(s.m.title)}" style="left:${(s.a*100).toFixed(2)}%;width:${Math.max(w,.5).toFixed(2)}%;--pc:${playerColor(s.m.player)}" title="${esc(s.m.title)} · ${s.m.player.split('.')[0]} · ${fmt(s.m.first)}–${fmt(s.m.last)} · ${fmtDur(s.m.watched_s)}"><span class="lbl">${w>3?esc(s.m.title):''}</span></div>`;
+      return `<div class="pl-block" data-title="${esc(s.title)}" data-t="${s.start}" style="left:${(s.a*100).toFixed(2)}%;width:${Math.max(w,.5).toFixed(2)}%;--pc:${playerColor(s.player)}" title="${esc(s.title)} · ${s.player.split('.')[0]} · ${fmt(new Date(s.start))}–${fmt(new Date(s.end))} · ${fmtDur(s.watched)}"><span class="lbl">${w>3?esc(s.title):''}</span></div>`;
     }).join('')}</div>`).join('');
-  plShell.innerHTML = `<div class="pl-hours">${hours}</div>${rowHtml}
+  plShell.innerHTML = `<div class="pl-off">${offMarkup()}</div><div class="pl-hours">${hours}</div>${rowHtml}
     ${extra?`<div class="pl-row"><div class="pl-more">+${extra} more row${extra>1?'s':''} of simultaneous media</div></div>`:''}
     <div class="pl-caret" id="plcaret"></div>`;
   plCaretEl = document.getElementById('plcaret');
   plShell.addEventListener('click', e=>{
     const b = e.target.closest('.pl-block');
     if(!b) return;
-    const m = media.find(x=>x.title===b.dataset.title);
-    if(m){ select(frameNear(new Date(m.first))); openSessionByTitle(m.title); }
+    select(frameNear(new Date(+b.dataset.t)));
+    openSessionByTitle(b.dataset.title);
   });
 }
 let plCaretEl = null;
 function syncLane(f){
   const t = new Date(f.ts).getTime();
+  const runs = buildRuns();
   document.querySelectorAll('.pl-block').forEach(b=>{
-    const m = media.find(x=>x.title===b.dataset.title);
-    b.classList.toggle('active', !!(m && new Date(m.first).getTime()<=t && new Date(m.last).getTime()>=t));
+    const r = runs.find(x=>x.title===b.dataset.title);
+    b.classList.toggle('active', !!(r && t>=r.start && t<=r.end));
   });
   if(plCaretEl){
     plCaretEl.style.left = `${(fracT(f.ts)*100).toFixed(2)}%`;
@@ -684,6 +723,7 @@ const rulerEl = $('#ruler');
   rulerEl.innerHTML = marks.map(m=>`<span style="left:${posOf(frameNear(m))}%">${m.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}</span>`).join('');
   $('#track .hours').innerHTML = marks.map(m=>`<div style="left:${posOf(frameNear(m))}%"></div>`).join('');
   $('#crange').textContent = `${fmt(t0)} – ${fmt(t1)}`;
+  $('#off').innerHTML = offMarkup();
 })();
 
 /* colored segment bands (app runs along the capture axis, tiled by frame count) */
