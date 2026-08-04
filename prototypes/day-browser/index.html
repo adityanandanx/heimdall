@@ -809,10 +809,17 @@ $('#zo').addEventListener('click', ()=>setZoom(Math.round(ppm/1.5)));
 $('#zi').addEventListener('click', ()=>setZoom(Math.round(ppm*1.5)));
 $('#zoomval').textContent = `${Math.round(ppm)}px/min`;
 tape.addEventListener('wheel', e=>{
-  if(e.shiftKey) return;   // shift+wheel = horizontal scroll
   e.preventDefault();
-  const rect = tape.getBoundingClientRect();
-  setZoom(ppm*(e.deltaY<0?1.25:0.8), e.clientX - rect.left);
+  let dx = e.deltaX, dy = e.deltaY;
+  if(e.deltaMode === 1){ dx*=16; dy*=16; }        // line -> px
+  if(e.shiftKey && dy && !dx){ dx = dy; dy = 0; } // shift+wheel = horizontal pan
+  if(dx){                                          // horizontal scroll pans the view
+    tape.scrollLeft = Math.max(0, Math.min(tape.scrollLeft + dx, Math.max(0, AXIS_W - tape.clientWidth)));
+  }
+  if(dy){                                          // vertical wheel stretches the timeline
+    const rect = tape.getBoundingClientRect();
+    setZoom(ppm*(dy<0?1.25:0.8), e.clientX - rect.left);
+  }
 }, {passive:false});
 
 /* ---------- selection state ---------- */
