@@ -9,9 +9,11 @@ from __future__ import annotations
 
 SYSTEM_PROMPT = (
     "You are Heimdall, a local screen-memory recap agent for a single user on Hyprland. "
-    "You are given OCR'd window frames captured throughout the day. The user's real "
-    "activities include: building projects, researching, applying to jobs/internships, "
-    "watching YouTube, movies, listening to music, practicing DSA. "
+    "You are given window frames captured throughout the day — exact a11y tree text where "
+    "a window exposes it, OCR otherwise — plus media watch-sessions (YouTube/Movies) with "
+    "their watched range and transcript. The user's real activities include: building "
+    "projects, researching, applying to jobs/internships, watching YouTube, movies, "
+    "listening to music, practicing DSA. "
     "Windows like music players, movies and YouTube have few or no window events, so "
     "infer those from window titles. Group everything into a small set of categories "
     "with rough minutes each. Answer with a single JSON object and no other text."
@@ -79,8 +81,9 @@ DB_SEARCH_TOOL = {
     "function": {
         "name": "db_search",
         "description": (
-            "Search the day's OCR'd screen frames by keyword. Returns up to "
-            "`limit` ranked hits with timestamps and snippets."
+            "Search the day's screen memory — window frames (a11y/OCR text) and "
+            "media watch-session transcripts — by keyword. Returns up to `limit` "
+            "ranked hits with timestamps and snippets."
         ),
         "parameters": {
             "type": "object",
@@ -100,9 +103,11 @@ RETRIEVAL_SYSTEM_PROMPT = (
     "You are Heimdall, a local screen-memory recap agent for a single user on Hyprland. "
     "The user's real activities include: building projects, researching, applying to "
     "jobs/internships, watching YouTube, movies, listening to music, practicing DSA. "
-    "Music/movies/YouTube have few or no window events, so infer those from window titles. "
-    "You have access to the db_search tool: it searches the day's OCR'd window frames and "
-    "returns ranked snippets with timestamps. Call it as many times as you need to gather "
+    "Music/movies/YouTube have few or no window events, so infer those from window titles "
+    "and media watch-session transcripts. "
+    "You have access to the db_search tool: it searches the day's window frames (a11y/OCR "
+    "text) and media watch-session transcripts, returning ranked snippets with timestamps. "
+    "Call it as many times as you need to gather "
     "evidence about what the user did today. When you have gathered enough, stop calling "
     "tools and answer with a single JSON object exactly of the shape "
     '{"date": "YYYY-MM-DD", "summary": string, "accomplishments": [string], '
@@ -115,24 +120,66 @@ def est_tokens(text: str) -> int:
     return max(1, len(text) // 3.5)
 
 
-def build_recap_prompt(frames: list[dict], day: str, budget_tokens: int = 6000) -> str:
+def _fmt_video_us(us: int) -> str:
+    """Video-time microseconds as 'H:MM:SS' (hours dropped when zero)."""
+    total_s = us // 1_000_000
+    h, rem = divmod(total_s, 3600)
+    m, s = divmod(rem, 60)
+    return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
+
+
+def _media_session_lines(sessions: list[dict]) -> list[str]:
+    """One prompt line per closed media session (#41): title + watched range +
+    a short transcript snippet. Media windows produce no OCR/a11y text, so the
+    session line is their only content in the recap."""
+    lines = []
+    for s in sorted(sessions, key=lambda s: s.get("ts_start") or 0):
+        if s.get("live") or s.get("ts_end") is None:
+            continue
+        line = f"{s['ts_start']} | media: {s.get('media_title') or 'untitled'}"
+        if s.get("pos_start") is not None and s.get("pos_end") is not None:
+            line += f" | watched {_fmt_video_us(s['pos_start'])}-{_fmt_video_us(s['pos_end'])}"
+        snippet = (s.get("transcript") or "").strip().replace("\n", " ")
+        if snippet:
+            line += f" | transcript: {snippet[:OCR_SNIPPET_CHARS]}"
+        lines.append(line)
+    return lines
+
+
+def build_recap_prompt(frames: list[dict], day: str, *, sessions: list[dict] | None = None,
+                       budget_tokens: int = 6000) -> str:
     """Per-frame `ts | window_class | window_title` lines, titles primary.
 
-    A short OCR snippet is appended per frame up to `budget_tokens`; all frames
-    keep their title line (never truncate the frame list). Raises ValueError if
-    even the title-only prompt exceeds the hard context budget.
+    Each frame's line carries the winner text snippet — `a11y:` when the tree
+    won, else `ocr:` — up to `budget_tokens`; all frames keep their title line
+    (never truncate the frame list). Frames whose window is a media watch-session
+    are dropped in favour of a session line (title + watched range + transcript
+    snippet). Raises ValueError if even the title-only prompt exceeds the hard
+    context budget.
     """
     frames = sorted(frames, key=lambda f: f["ts"])
+    sessions = sessions or []
+    media_titles = {s.get("media_title") for s in sessions if s.get("media_title")}
     lines = []
     snippet_budget = budget_tokens
     for f in frames:
+        if (f.get("window_title") or "") in media_titles:
+            continue
         line = f"{f['ts']} | {f['window_class']} | {f['window_title']}"
-        ocr = (f.get("ocr_text") or "").strip().replace("\n", " ")
-        if ocr and est_tokens(line) + est_tokens(ocr[:OCR_SNIPPET_CHARS]) < snippet_budget:
-            line += f"  ocr: {ocr[:OCR_SNIPPET_CHARS]}"
-            snippet_budget -= est_tokens(ocr[:OCR_SNIPPET_CHARS])
+        winner = (f.get("a11y_text") or "").strip().replace("\n", " ")
+        label = "a11y"
+        if not winner:
+            winner = (f.get("ocr_text") or "").strip().replace("\n", " ")
+            label = "ocr"
+        if winner and est_tokens(line) + est_tokens(winner[:OCR_SNIPPET_CHARS]) < snippet_budget:
+            line += f"  {label}: {winner[:OCR_SNIPPET_CHARS]}"
+            snippet_budget -= est_tokens(winner[:OCR_SNIPPET_CHARS])
         lines.append(line)
     text = "Here are today's frames:\n\n" + "\n".join(lines)
+    media_lines = _media_session_lines(sessions)
+    if media_lines:
+        text += ("\n\nHere are today's media watch-sessions (these windows produce "
+                 "no OCR/a11y text):\n\n" + "\n".join(media_lines))
     if est_tokens(text) > HARD_CONTEXT_TOKENS:
         raise PromptOverBudget(
             f"day {day} has {len(frames)} frames: even the title-only prompt exceeds the "

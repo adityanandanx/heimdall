@@ -62,6 +62,28 @@ def track_playing_ms(tracks: list[dict], start_ms: int, end_ms: int) -> int:
     return total
 
 
+def session_wall_ms(sessions: list[dict], start_ms: int, end_ms: int) -> dict[str, int]:
+    """Wall-while-playing time per media category from watch-sessions (#41).
+
+    A session's [ts_start, ts_end] is wall-clock time the player actually spent
+    playing (the MPRIS state machine accrues wall time only during playback), so
+    it supersedes frame/title-delta timing for media. Local `file://` sources are
+    Movies; everything else (browser sessions) is YouTube. Live/in-progress
+    sessions contribute nothing (their ts_end is unknown).
+    """
+    out = {"YouTube": 0, "Movies": 0}
+    for s in sessions:
+        if s.get("live") or s.get("ts_start") is None or s.get("ts_end") is None:
+            continue
+        ms = max(0, min(s["ts_end"], end_ms) - max(s["ts_start"], start_ms))
+        if not ms:
+            continue
+        source = s.get("media_source") or ""
+        cat = "Movies" if source.startswith("file://") else "YouTube"
+        out[cat] += ms
+    return out
+
+
 def rules_minutes(spans: list[Span], rules: dict) -> tuple[dict[str, int], list[Span]]:
     """Split spans into rules-settled category minutes and the unclassified rest.
 

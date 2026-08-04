@@ -8,7 +8,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from heimdall.capture.spans import compute_spans, rules_minutes, spans_to_table, track_playing_ms
+from heimdall.capture.spans import (compute_spans, rules_minutes, session_wall_ms,
+                                    spans_to_table, track_playing_ms)
 from heimdall.config import Config
 from heimdall.db import Database
 from heimdall.observability import TraceGate
@@ -32,18 +33,26 @@ def normalize_category(name: str) -> str:
 
 
 def assemble_minutes(settled: dict[str, int], music_ms: int, llm_categories: list[dict],
-                     unclassified_ms: int) -> dict[str, int]:
+                     unclassified_ms: int,
+                     media_ms: dict[str, int] | None = None) -> dict[str, int]:
     """Combine rules-settled, exact-music and LLM-classified minutes.
 
     Music is overridden by exact playback time when tracks exist; the LLM's
     category names outside the fixed vocabulary fold into Other; the residual
-    of unclassified time the LLM did not account for lands in Other.
+    of unclassified time the LLM did not account for lands in Other. YouTube /
+    Movies are overridden by exact watch-session wall spans when present — media
+    sessions supersede title-delta timing (#41).
     """
     minutes = {cat: 0 for cat in BREAKDOWN_CATEGORIES}
     for cat, ms in settled.items():
         minutes[cat] = minutes.get(cat, 0) + round(ms / 60_000)
     if music_ms > 0:
         minutes["Music"] = round(music_ms / 60_000)
+    if media_ms:
+        for cat in ("YouTube", "Movies"):
+            ms = media_ms.get(cat, 0)
+            if ms > 0:
+                minutes[cat] = round(ms / 60_000)
     assigned = 0
     for item in llm_categories:
         mins = max(0, int(item["minutes"]))
@@ -60,6 +69,8 @@ def run(*, day: str, db_path: str | Path, llm: LlmClient, gate: TraceGate,
     db = Database(db_path)
     frames = db.frames_in_range(start_ms, end_ms)
     tracks = db.list_tracks(start_ms, end_ms)
+    _, sessions = db.list_watch_sessions(start=start_ms, end=end_ms, limit=100_000)
+    media_ms = session_wall_ms(sessions, start_ms, end_ms)
 
     spans = compute_spans(frames, end_ms)
     rules = config.window_class_category
@@ -80,9 +91,10 @@ def run(*, day: str, db_path: str | Path, llm: LlmClient, gate: TraceGate,
             llm_categories = parse_breakdown(raw)["categories"]
 
     unclassified_ms = sum(max(0, s.end_ms - s.start_ms) for s in unclassified)
-    minutes = assemble_minutes(settled, music_ms, llm_categories, unclassified_ms)
+    minutes = assemble_minutes(settled, music_ms, llm_categories, unclassified_ms,
+                               media_ms)
 
-    evidence = build_evidence(settled, music_ms, tracks, llm_categories)
+    evidence = build_evidence(settled, music_ms, tracks, llm_categories, media_ms)
 
     gate.metadata(db_queries=db.query_count)
 
@@ -106,7 +118,8 @@ def run(*, day: str, db_path: str | Path, llm: LlmClient, gate: TraceGate,
 
 
 def build_evidence(settled: dict[str, int], music_ms: int, tracks: list[dict],
-                   llm_categories: list[dict]) -> dict[str, str]:
+                   llm_categories: list[dict],
+                   media_ms: dict[str, int] | None = None) -> dict[str, str]:
     evidence: dict[str, str] = {}
     if music_ms > 0:
         evidence["Music"] = f"exact playback spans from {len(tracks)} track events"
@@ -119,4 +132,7 @@ def build_evidence(settled: dict[str, int], music_ms: int, tracks: list[dict],
             evidence[cat] = "window-class rule (frame/title spans)"
     for item in llm_categories:
         evidence[normalize_category(item["category"])] = item.get("evidence") or "LLM-classified window spans"
+    for cat in ("YouTube", "Movies"):
+        if media_ms and media_ms.get(cat, 0) > 0:
+            evidence[cat] = "exact watch-session wall spans"
     return evidence

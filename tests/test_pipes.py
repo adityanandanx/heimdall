@@ -8,8 +8,10 @@ import httpx
 import pytest
 
 from heimdall.config import Config
+from heimdall.capture.sessions import SessionTracker
 from heimdall.db import Database, init_db
 from heimdall.observability import TraceGate
+from heimdall.pipes.breakdown import run as run_breakdown
 from heimdall.pipes.llm import LlmClient
 from heimdall.pipes.parse import (
     PipeValidationError,
@@ -79,6 +81,84 @@ def test_build_recap_prompt_over_budget_raises():
                "ocr_text": ""} for i in range(5000)]
     with pytest.raises(ValueError):
         build_recap_prompt(frames, "2026-08-02", budget_tokens=6000)
+
+
+def test_build_recap_prompt_uses_a11y_winner_text():
+    """Per-frame text is the winner — a11y_text when the tree won, ocr_text
+    otherwise; the loser never reaches the prompt (#41)."""
+    frames = [
+        {"ts": 1, "window_class": "code", "window_title": "one",
+         "a11y_text": "exact tree text", "ocr_text": "grble dgit"},
+        {"ts": 2, "window_class": "kitty", "window_title": "two",
+         "ocr_text": "plain ocr words"},
+    ]
+    prompt = build_recap_prompt(frames, "2026-08-02", budget_tokens=1000)
+    assert "a11y: exact tree text" in prompt
+    assert "grble" not in prompt  # ocr loser suppressed when a11y wins
+    assert "ocr: plain ocr words" in prompt
+
+
+def test_build_recap_prompt_media_sessions_replace_frames():
+    """A media window's frames are dropped in favour of a watch-session line:
+    title + watched video range + a short transcript snippet (#41)."""
+    frames = [
+        {"ts": 100, "window_class": "vlc", "window_title": "Inception (2010)",
+         "ocr_text": "vhcl vlyer menv"},
+        {"ts": 200, "window_class": "code", "window_title": "x.py", "ocr_text": "fn main"},
+    ]
+    sessions = [{"ts_start": 100, "ts_end": 300, "live": 0,
+                 "media_title": "Inception (2010)",
+                 "pos_start": 60_000_000, "pos_end": 3_000_000_000,
+                 "transcript": "You mustn't be afraid to dream a little bigger"}]
+    prompt = build_recap_prompt(frames, "2026-08-02", sessions=sessions, budget_tokens=1000)
+    assert "| vlc | Inception (2010)" not in prompt  # media frame replaced
+    assert "media: Inception (2010)" in prompt
+    assert "watched 1:00-50:00" in prompt
+    assert "transcript: You mustn't be afraid" in prompt
+    assert "| code | x.py" in prompt  # non-media frame kept
+
+
+def test_breakdown_media_minutes_from_sessions(tmp_path):
+    """YouTube/Movies minutes come from exact watch-session wall spans when
+    present, superseding title-delta classification; evidence names the source."""
+    db_path = tmp_path / "data.db"
+    init_db(db_path)
+    db = Database(db_path)
+    start_ms, end_ms = day_bounds("2026-08-02")
+
+    db.insert_frame({
+        "ts": end_ms - 60_000, "monitor": 0, "workspace": 2,
+        "window_class": "code", "window_title": "x.py", "fullscreen": 0,
+        "trigger": "activewindow", "image_path": "f.jpg", "image_bytes": 0,
+        "ocr_text": "fn main", "ocr_sec": 0.0,
+    })
+
+    def watch(player, title, source, wall_start_ms, wall_end_ms, pos_us):
+        t = SessionTracker(pause_ends_session_s=60)
+        t.play(player, title=title, source=source, position_us=0,
+               length_us=pos_us, wall_ms=wall_start_ms, media_id="id")
+        return db.insert_watch_session(
+            t.stop(player, position_us=pos_us, wall_ms=wall_end_ms))
+
+    watch("chromium.instance1", "Rick Astley - Never Gonna Give You Up",
+          "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+          start_ms + 60_000, start_ms + 60_000 + 30 * 60_000, 3_000_000_000)
+    watch("vlc", "Inception (2010)", "file:///mnt/movies/Inception.mkv",
+          start_ms + 60_000 + 40 * 60_000, start_ms + 60_000 + 90 * 60_000,
+          7_200_000_000)
+
+    def handler(request):
+        return httpx.Response(200, json={"choices": [{"message": {
+            "role": "assistant", "content": json.dumps({"categories": []})}}]})
+
+    llm = LlmClient("http://x", "m", transport=httpx.MockTransport(handler))
+    cfg = Config(data_dir=tmp_path)
+    result = run_breakdown(day="2026-08-02", db_path=db_path, llm=llm,
+                           gate=TraceGate(False), config=cfg)
+    minutes = parse_breakdown_table(result["markdown"])
+    assert minutes["YouTube"] == 30
+    assert minutes["Movies"] == 50
+    assert "exact watch-session wall spans" in result["markdown"]
 
 
 # ---- over-budget day: FTS5 db_search agent loop (spec #4) ----

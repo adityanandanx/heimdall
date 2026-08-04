@@ -38,9 +38,10 @@ def run(*, day: str, db_path: str | Path, llm: LlmClient, gate: TraceGate,
     start_ms, end_ms = day_bounds(day)
     db = Database(db_path)
     frames = db.frames_in_range(start_ms, end_ms)
+    _, sessions = db.list_watch_sessions(start=start_ms, end=end_ms, limit=100_000)
 
     try:
-        recap = _one_shot(day, frames, llm, gate)
+        recap = _one_shot(day, frames, sessions, llm, gate)
         mode = "single-shot"
     except PromptOverBudget:
         log.info("day %s over budget (%s frames): using FTS5 db_search tool loop", day, len(frames))
@@ -70,8 +71,9 @@ def run(*, day: str, db_path: str | Path, llm: LlmClient, gate: TraceGate,
     }
 
 
-def _one_shot(day: str, frames: list[dict], llm: LlmClient, gate: TraceGate) -> dict:
-    prompt = build_recap_prompt(frames, day)
+def _one_shot(day: str, frames: list[dict], sessions: list[dict], llm: LlmClient,
+              gate: TraceGate) -> dict:
+    prompt = build_recap_prompt(frames, day, sessions=sessions)
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": prompt},

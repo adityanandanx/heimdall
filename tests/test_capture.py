@@ -18,7 +18,8 @@ from heimdall.capture.events import (
     should_capture,
     workspace_id,
 )
-from heimdall.capture.spans import compute_spans, rules_minutes, spans_to_table, track_playing_ms
+from heimdall.capture.spans import (compute_spans, rules_minutes, session_wall_ms,
+                                    spans_to_table, track_playing_ms)
 
 from conftest import content_tree
 
@@ -180,6 +181,29 @@ def test_rules_minutes_splits_spans():
     settled, unclassified = rules_minutes(spans, {"mpv": "Movies", "sidra": "Music"})
     assert settled == {"Movies": 10, "Music": 20}
     assert [(s.window_class, s.minutes) for s in unclassified] == [("firefox", 10 / 60_000)]
+
+
+def test_session_wall_ms_categorizes_and_skips_live():
+    """YouTube/Movies wall-while-playing minutes come from watch-sessions: local
+    file:// sources are Movies, everything else YouTube; live rows contribute 0."""
+    sessions = [
+        {"ts_start": 0, "ts_end": 1_000_000, "live": 0,
+         "media_source": "https://www.youtube.com/watch?v=x"},
+        {"ts_start": 2_000_000, "ts_end": 3_000_000, "live": 0,
+         "media_source": "file:///mnt/movies/Inception.mkv"},
+        {"ts_start": 4_000_000, "ts_end": 5_000_000, "live": 1,
+         "media_source": "file:///mnt/movies/other.mkv"},
+    ]
+    out = session_wall_ms(sessions, 0, 10_000_000)
+    assert out["YouTube"] == 1_000_000
+    assert out["Movies"] == 1_000_000
+    assert out["YouTube"] + out["Movies"] == 2_000_000
+
+
+def test_session_wall_ms_clips_to_day_window():
+    sessions = [{"ts_start": -1_000_000, "ts_end": 6_000_000, "live": 0,
+                 "media_source": "https://youtu.be/x"}]
+    assert session_wall_ms(sessions, 0, 5_000_000)["YouTube"] == 5_000_000
 
 
 def test_spans_to_table_groups_by_window():
