@@ -456,12 +456,16 @@ const frames = [...DATA.items].sort((a,b)=>a.ts-b.ts);
 const t0 = frames[0].ts, t1 = frames[frames.length-1].ts;
 const dur = new Date(t1) - new Date(t0);
 const dayStr = new Date(t1).toLocaleDateString([], {weekday:'short', month:'short', day:'numeric', year:'numeric'});
+/* a gap longer than this between captures means the laptop was off/idle:
+   it splits app chapters and media runs, and marks the off stretch */
+const OFF_MIN = 8*60*1000;
 
 function chapters(){
   const out = [];
   for (const f of frames){
     const last = out[out.length-1];
-    if (last && last.cls === f.window_class) last.frames.push(f);
+    if (last && last.cls === f.window_class && new Date(f.ts) - new Date(last.frames[last.frames.length-1].ts) <= OFF_MIN)
+      last.frames.push(f);
     else out.push({cls:f.window_class, frames:[f]});
   }
   return out;
@@ -645,7 +649,7 @@ function buildRuns(){
 }
 /* stretches where the laptop captured nothing (no frames), i.e. likely asleep/off */
 function offSpans(){
-  const out=[]; const OFF_MIN=8*60*1000;
+  const out=[];
   for(let i=1;i<frames.length;i++){
     const g=new Date(frames[i].ts)-new Date(frames[i-1].ts);
     if(g>OFF_MIN) out.push({a:fracT(new Date(frames[i-1].ts))*100, b:fracT(new Date(frames[i].ts))*100});
@@ -731,7 +735,13 @@ $('#segs').innerHTML = (function(){
   const chs = chapters();
   return chs.map((ch,i)=>{
     const a = fracT(new Date(ch.frames[0].ts))*100;
-    const endTs = i+1<chs.length ? new Date(chs[i+1].frames[0].ts) : new Date(ch.frames[ch.frames.length-1].ts);
+    /* pad to the next chapter's first frame, but stop at the last frame when
+       the laptop was off in between (no captures) so the gap stays open */
+    let endTs;
+    if(i+1<chs.length){
+      const gap = new Date(chs[i+1].frames[0].ts) - new Date(ch.frames[ch.frames.length-1].ts);
+      endTs = gap > OFF_MIN ? new Date(ch.frames[ch.frames.length-1].ts) : new Date(chs[i+1].frames[0].ts);
+    } else endTs = new Date(ch.frames[ch.frames.length-1].ts);
     const b = fracT(endTs)*100;
     return `<div class="seg" data-app="${esc(ch.cls)}" style="left:${a.toFixed(2)}%;width:${Math.max(b-a,.05).toFixed(2)}%;background:${clsColor(ch.cls)}" title="${esc(ch.cls)}"></div>`;
   }).join('');
