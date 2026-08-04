@@ -403,7 +403,8 @@
       Hover or drag to open a frame preview that peeks up from the bar, like a video scrubber.
       Colored bands = apps; dots = captures; <span class="chip dim">hits</span> = your search —
       everything sits on a single true time axis, so dots, app bands, and the media blocks line up.
-      Long gaps scroll like an editor: drag the tape sideways and it auto-follows the selected frame.
+      No-capture stretches compress into small hatched markers, so the timeline only shows real
+      activity; drag the tape sideways and it auto-follows the selected frame.
       The <b>Watch timeline</b> lane (<span style="color:#ff9d9d">chromium</span>,
       <span style="color:#f0a65b">brave</span>, <span style="color:#3ecf8e">sidra</span>)
       mirrors your media as contiguous runs (a gap longer than 5 min splits a run);
@@ -498,8 +499,42 @@ function playingAt(ts){
 }
 const playingStarts = musicSessions;
 const musicBlock = t => t.title || '(untitled)';
-const posOf = f => fracT(new Date(f.ts)) * 100;
-const fracT = ts => (new Date(ts)-new Date(t0))/dur;
+const posOf = f => axisOf(f.ts);
+const fracT = ts => (new Date(ts)-new Date(t0))/dur;   // linear day fraction (grid, density layout)
+/* collapsed time axis: active stretches keep px-per-minute scale; off gaps
+   (no captures for > OFF_MIN) compress to a small fixed-width marker, so the
+   timeline only shows real activity like a video editor leaves out silence */
+const PPM = 5, GAP_W = 14;
+function buildAxis(){
+  const spans = [];
+  let x = 0;
+  for(let i=0;i<frames.length-1;i++){
+    const a = new Date(frames[i].ts).getTime(), b = new Date(frames[i+1].ts).getTime();
+    const off = b-a > OFF_MIN;
+    const w = off ? GAP_W : (b-a)/60000*PPM;
+    spans.push({a, b, off, x0:x, x1:x+w});
+    x += w;
+  }
+  return spans;
+}
+const axis = buildAxis();
+const AXIS_W = axis[axis.length-1].x1;
+function axisOf(ts){
+  const t = new Date(ts).getTime();
+  let lo=0, hi=axis.length;
+  while(lo<hi){ const mid=(lo+hi)>>1; if(axis[mid].a<=t) lo=mid+1; else hi=mid; }
+  const s = axis[Math.max(0, lo-1)];
+  if(t <= s.a) return s.x0;
+  if(t >= s.b) return s.x1;
+  return s.x0 + (t-s.a)/(s.b-s.a)*(s.x1-s.x0);
+}
+function tsOf(x){
+  x = Math.max(0, Math.min(x, AXIS_W));
+  let lo=0, hi=axis.length;
+  while(lo<hi){ const mid=(lo+hi)>>1; if(axis[mid].x1<=x) lo=mid+1; else hi=mid; }
+  const s = axis[Math.min(Math.max(lo,0), axis.length-1)];
+  return new Date(s.a + (x - s.x0)/(s.x1-s.x0)*(s.b-s.a)).getTime();
+}
 function frameNear(ts){
   let best = frames[0], bd = Infinity;
   for(const f of frames){ const d = Math.abs(new Date(f.ts) - new Date(ts)); if(d < bd){ bd = d; best = f; } }
@@ -608,11 +643,11 @@ function applyAppFilter(){
   });
 }
 
-/* ---------- capture density (time-linear, shows where captures cluster) ---------- */
+/* ---------- capture density (along the collapsed axis, shows where captures cluster) ---------- */
 (function(){
   const NB = 48;
   const bins = new Array(NB).fill(0);
-  for(const f of frames) bins[Math.min(Math.floor(fracT(f.ts)*NB), NB-1)]++;
+  for(const f of frames) bins[Math.min(Math.floor(axisOf(f.ts)/AXIS_W*NB), NB-1)]++;
   const max = Math.max(...bins, 1);
   $('#density').innerHTML = bins.map(n=>
     `<div class="b" style="height:${Math.max(n? n/max*100 : 4, 4)}%"></div>`).join('');
@@ -621,9 +656,8 @@ function applyAppFilter(){
 /* ---------- parallel watch-session lane (time-linear, synced to the scrubber) ---------- */
 const plShell = $('#plshell');
 const tape = $('#tape'), canvasEl = $('#canvas');
-const TAPE_PX_PER_MIN = 5;
 (function(){
-  canvasEl.style.width = Math.max(tape.clientWidth, dur/60000*TAPE_PX_PER_MIN) + 'px';
+  canvasEl.style.width = Math.max(tape.clientWidth, AXIS_W) + 'px';
 })();
 const PL_MAX_ROWS = 5;
 /* contiguous runs of one media/player; a gap > GAP_MIN (laptop off) splits a run */
@@ -649,15 +683,10 @@ function buildRuns(){
 }
 /* stretches where the laptop captured nothing (no frames), i.e. likely asleep/off */
 function offSpans(){
-  const out=[];
-  for(let i=1;i<frames.length;i++){
-    const g=new Date(frames[i].ts)-new Date(frames[i-1].ts);
-    if(g>OFF_MIN) out.push({a:fracT(new Date(frames[i-1].ts))*100, b:fracT(new Date(frames[i].ts))*100});
-  }
-  return out;
+  return axis.filter(s=>s.off);
 }
-const offMarkup = ()=>offSpans().map(o=>
-  `<div title="no captures — laptop off or idle" style="left:${o.a.toFixed(2)}%;width:${(o.b-o.a).toFixed(2)}%"></div>`).join('');
+const offMarkup = ()=>offSpans().map(s=>
+  `<div title="no captures — laptop off or idle" style="left:${s.x0}px;width:${Math.max(s.x1-s.x0,1)}px"></div>`).join('');
 function renderLane(){
   const marks=[];
   const hrs = new Set(frames.map(f=>new Date(f.ts).getHours()));
@@ -665,14 +694,14 @@ function renderLane(){
     const m=new Date(t0); m.setHours(h,0,0,0);
     if(m>=new Date(t0)) marks.push(m);
   });
-  const hours = marks.map(m=>`<div style="left:${(fracT(m)*100).toFixed(2)}%"></div>`).join('');
+  const hours = marks.map(m=>`<div style="left:${axisOf(m).toFixed(1)}px"></div>`).join('');
 
   /* interval coloring: greedy-sort by start, assign each block to the
      lowest row whose last block has ended */
   const spans = buildRuns().map(r=>({
     title:r.title, player:r.player, start:r.start, end:r.end, watched:r.watched,
-    a:fracT(new Date(r.start)), b:fracT(new Date(r.end))
-  })).filter(s=>s.b-s.a>0.001)
+    a:axisOf(new Date(r.start)), b:axisOf(new Date(r.end))
+  })).filter(s=>s.b-s.a>0.5)
      .sort((x,y)=>x.start-y.start || y.end-x.end);
   const rows=[], rowEnds=[];
   for(const s of spans){
@@ -685,8 +714,8 @@ function renderLane(){
   const extra=rows.length-shown.length;
   const rowHtml=shown.map(row=>`
     <div class="pl-row">${row.map(s=>{
-      const w=(s.b-s.a)*100;
-      return `<div class="pl-block" data-title="${esc(s.title)}" data-t="${s.start}" style="left:${(s.a*100).toFixed(2)}%;width:${Math.max(w,.5).toFixed(2)}%;--pc:${playerColor(s.player)}" title="${esc(s.title)} · ${s.player.split('.')[0]} · ${fmt(new Date(s.start))}–${fmt(new Date(s.end))} · ${fmtDur(s.watched)}"><span class="lbl">${w>3?esc(s.title):''}</span></div>`;
+      const w=s.b-s.a;
+      return `<div class="pl-block" data-title="${esc(s.title)}" data-t="${s.start}" style="left:${s.a.toFixed(1)}px;width:${Math.max(w,1).toFixed(1)}px;--pc:${playerColor(s.player)}" title="${esc(s.title)} · ${s.player.split('.')[0]} · ${fmt(new Date(s.start))}–${fmt(new Date(s.end))} · ${fmtDur(s.watched)}"><span class="lbl">${w>70?esc(s.title):''}</span></div>`;
     }).join('')}</div>`).join('');
   plShell.innerHTML = `<div class="pl-off">${offMarkup()}</div><div class="pl-hours">${hours}</div>${rowHtml}
     ${extra?`<div class="pl-row"><div class="pl-more">+${extra} more row${extra>1?'s':''} of simultaneous media</div></div>`:''}
@@ -708,7 +737,7 @@ function syncLane(f){
     b.classList.toggle('active', !!(r && t>=r.start && t<=r.end));
   });
   if(plCaretEl){
-    plCaretEl.style.left = `${(fracT(f.ts)*100).toFixed(2)}%`;
+    plCaretEl.style.left = `${axisOf(f.ts).toFixed(1)}px`;
     plCaretEl.classList.add('show');
   }
 }
@@ -724,8 +753,8 @@ const rulerEl = $('#ruler');
     const m=new Date(t0); m.setHours(h,0,0,0);
     if(m>=new Date(t0)) marks.push(m);
   });
-  rulerEl.innerHTML = marks.map(m=>`<span style="left:${posOf(frameNear(m))}%">${m.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}</span>`).join('');
-  $('#track .hours').innerHTML = marks.map(m=>`<div style="left:${posOf(frameNear(m))}%"></div>`).join('');
+  rulerEl.innerHTML = marks.map(m=>`<span style="left:${axisOf(new Date(m)).toFixed(1)}px">${m.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}</span>`).join('');
+  $('#track .hours').innerHTML = marks.map(m=>`<div style="left:${axisOf(new Date(m)).toFixed(1)}px"></div>`).join('');
   $('#crange').textContent = `${fmt(t0)} – ${fmt(t1)}`;
   $('#off').innerHTML = offMarkup();
 })();
@@ -734,7 +763,7 @@ const rulerEl = $('#ruler');
 $('#segs').innerHTML = (function(){
   const chs = chapters();
   return chs.map((ch,i)=>{
-    const a = fracT(new Date(ch.frames[0].ts))*100;
+    const a = axisOf(new Date(ch.frames[0].ts));
     /* pad to the next chapter's first frame, but stop at the last frame when
        the laptop was off in between (no captures) so the gap stays open */
     let endTs;
@@ -742,8 +771,8 @@ $('#segs').innerHTML = (function(){
       const gap = new Date(chs[i+1].frames[0].ts) - new Date(ch.frames[ch.frames.length-1].ts);
       endTs = gap > OFF_MIN ? new Date(ch.frames[ch.frames.length-1].ts) : new Date(chs[i+1].frames[0].ts);
     } else endTs = new Date(ch.frames[ch.frames.length-1].ts);
-    const b = fracT(endTs)*100;
-    return `<div class="seg" data-app="${esc(ch.cls)}" style="left:${a.toFixed(2)}%;width:${Math.max(b-a,.05).toFixed(2)}%;background:${clsColor(ch.cls)}" title="${esc(ch.cls)}"></div>`;
+    const b = axisOf(endTs);
+    return `<div class="seg" data-app="${esc(ch.cls)}" style="left:${a.toFixed(1)}px;width:${Math.max(b-a,1).toFixed(1)}px;background:${clsColor(ch.cls)}" title="${esc(ch.cls)}"></div>`;
   }).join('');
 })();
 
@@ -751,7 +780,7 @@ $('#segs').innerHTML = (function(){
 function paintDots(hits){
   $('#dots').innerHTML = frames.map((f,i)=>{
     const h = hits && hits.has(f.id);
-    return `<div class="dot${h?' hit':''}" data-i="${i}" style="left:${posOf(f)}%"></div>`;
+    return `<div class="dot${h?' hit':''}" data-i="${i}" style="left:${axisOf(f.ts).toFixed(1)}px"></div>`;
   }).join('');
 }
 paintDots(null);
@@ -780,7 +809,7 @@ function warm(f){
 }
 
 function ensurePlayheadInView(f){
-  const x = (posOf(f)/100)*canvasEl.clientWidth;
+  const x = axisOf(f.ts);
   if(x < tape.scrollLeft || x > tape.scrollLeft + tape.clientWidth){
     tape.scrollLeft = Math.max(0, Math.min(x - tape.clientWidth/3, tape.scrollWidth - tape.clientWidth));
   }
@@ -812,7 +841,7 @@ function select(f, rapid){
   if(changed && didInit && !rapid && !dragging) ensurePlayheadInView(f);
   $('#ctime').textContent = fmtS(f.ts);
   $('#cmeta').textContent = `${f.window_class}${f.window_title?' · '+esc(f.window_title):''}`.slice(0,70);
-  $('#playhead').style.left = `${posOf(f)}%`;
+  $('#playhead').style.left = `${axisOf(f.ts).toFixed(1)}px`;
   didInit = true;
 }
 
@@ -825,10 +854,12 @@ let tipFrame = null;
 const PEEK_W = 300;
 
 function frameAtX(clientX){
+  /* rect.left already reflects horizontal scroll, so a plain offset is the
+     canvas-local x; map it back through the collapsed axis */
   const r = track.getBoundingClientRect();
-  const x = Math.min(Math.max(clientX - r.left + tape.scrollLeft, 0), r.width);
-  const ts = new Date(new Date(t0).getTime() + (x/r.width)*dur);
-  return {f: frameNear(ts), x, ts};
+  const x = Math.min(Math.max(clientX - r.left, 0), AXIS_W);
+  const ts = tsOf(x);
+  return {f: frameNear(new Date(ts)), x, ts: new Date(ts)};
 }
 function seek(clientX){
   const {f} = frameAtX(clientX);
@@ -848,7 +879,7 @@ function positionPeek(clientX){
   }
   peek.querySelector('.caret').style.left = (clientX - left - 7) + 'px';
   peek.classList.add('show');
-  caret.style.left = `${posOf(f)}%`;
+  caret.style.left = `${axisOf(f.ts).toFixed(1)}px`;
   caretPill.textContent = fmtS(ts);
   caret.classList.add('show');
 }
