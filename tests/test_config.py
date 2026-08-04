@@ -59,3 +59,20 @@ def test_watch_media_resolver_parses_cdp(tmp_path):
         "watch": {"media_resolver": "cdp"},
     }))
     assert cfg.watch.media_resolver == "cdp"
+
+
+def test_asr_defaults(tmp_path):
+    cfg = load_config(_write(tmp_path, {"data_dir": str(tmp_path)}))
+    assert cfg.asr.model == "small"
+    assert cfg.asr.device == "cpu"
+    assert cfg.asr.compute_type == "int8"
+
+
+def test_asr_parses(tmp_path):
+    cfg = load_config(_write(tmp_path, {
+        "data_dir": str(tmp_path),
+        "asr": {"model": "base", "device": "cuda", "compute_type": "float16"},
+    }))
+    assert cfg.asr.model == "base"
+    assert cfg.asr.device == "cuda"
+    assert cfg.asr.compute_type == "float16"

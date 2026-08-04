@@ -13,7 +13,7 @@ import sqlite3
 import threading
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Optional
 
 from heimdall.capture.sessions import WatchSession
 
@@ -120,7 +120,8 @@ CREATE TABLE IF NOT EXISTS watch_sessions (
     ranges TEXT NOT NULL,             -- JSON [[start_us, end_us], ...]; skipped segments excluded
     live INTEGER NOT NULL DEFAULT 0,  -- 1 while the session is in progress
     cues_json TEXT,                   -- sliced caption cues JSON, attached at close (#38)
-    transcript TEXT                   -- denormalized plain text, FTS-indexed (#38)
+    transcript TEXT,                  -- denormalized plain text, FTS-indexed (#38)
+    transcript_source TEXT            -- 'captions' (#38) or 'asr' (#40); NULL until a transcript lands
 );
 
 CREATE INDEX IF NOT EXISTS idx_frames_ts ON frames(ts);
@@ -149,7 +150,7 @@ SEARCH_COLS = ("id", "ts", "window_class", "window_title", "workspace", "image_p
 SESSION_COLS = (
     "id", "player", "media_title", "media_source", "media_id",
     "ts_start", "ts_end", "pos_start", "pos_end", "length", "ranges", "live",
-    "cues_json", "transcript",
+    "cues_json", "transcript", "transcript_source",
 )
 
 
@@ -191,7 +192,7 @@ def _migrate_v2(conn: sqlite3.Connection) -> None:
     ws_cols = {r[1] for r in conn.execute("PRAGMA table_info(watch_sessions)")}
     if "live" not in ws_cols:
         conn.execute("ALTER TABLE watch_sessions ADD COLUMN live INTEGER NOT NULL DEFAULT 0")
-    for col in ("cues_json", "transcript"):
+    for col in ("cues_json", "transcript", "transcript_source"):
         if col not in ws_cols:
             conn.execute(f"ALTER TABLE watch_sessions ADD COLUMN {col} TEXT")
     row = conn.execute(
@@ -576,17 +577,20 @@ class Database:
             )
             conn.commit()
 
-    def update_session_transcript(self, row_id: int, *, cues_json: str,
-                                  transcript: str) -> None:
-        """Attach sliced captions to a closed session row (#38).
+    def update_session_transcript(self, row_id: int, *, cues_json: Optional[str],
+                                  transcript: str,
+                                  transcript_source: Optional[str] = None) -> None:
+        """Attach a transcript to a closed session row (#38 / #40).
 
-        Runs after the row is persisted (live-finalized or freshly inserted);
-        the FTS update trigger keeps transcript search in sync."""
+        `transcript_source` stamps where it came from — ``captions`` for the
+        daemon's yt-dlp path, ``asr`` for the lazy whisper fallback. Runs after
+        the row is persisted (live-finalized or freshly inserted); the FTS
+        update trigger keeps transcript search in sync."""
         with self._lock, self.conn() as conn:
             conn.execute(
-                "UPDATE watch_sessions SET cues_json = ?, transcript = ?"
-                " WHERE id = ?",
-                (cues_json, transcript, row_id),
+                "UPDATE watch_sessions SET cues_json = ?, transcript = ?,"
+                " transcript_source = ? WHERE id = ?",
+                (cues_json, transcript, transcript_source, row_id),
             )
             conn.commit()
 
@@ -652,7 +656,7 @@ class Database:
         sql = (
             "SELECT s.id, s.player, s.media_title, s.media_source, s.ts_start, s.ts_end,"
             " s.pos_start, s.pos_end, s.length, s.ranges, s.live,"
-            " s.cues_json, s.transcript,"
+            " s.cues_json, s.transcript, s.transcript_source,"
             " COALESCE(snippet(watch_sessions_fts, 0, '**', '**', ' … ', 14),"
             "          snippet(watch_sessions_fts, 2, '**', '**', ' … ', 14),"
             "          snippet(watch_sessions_fts, 1, '**', '**', ' … ', 14)) AS snippet,"

@@ -19,6 +19,7 @@ from heimdall.pipes.llm import LlmClient
 from heimdall.scheduler import start_scheduler as start_scheduler_fn
 from heimdall.api.routers import (health_router, search_router, frames_router,
                                   pipes_router, status_router, sessions_router)
+from heimdall.capture.asr import AsrManager
 
 
 def create_app(config: Config, *, db_path: str | Path | None = None,
@@ -39,6 +40,7 @@ def create_app(config: Config, *, db_path: str | Path | None = None,
     app.state.started = time.time()
     app.state.last_runs: dict[str, str] = {}
     app.state.transport = llm_transport
+    app.state.asr = AsrManager(config, app.state.db)
 
     app.include_router(health_router)
     app.include_router(search_router)

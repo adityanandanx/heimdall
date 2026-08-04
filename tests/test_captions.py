@@ -233,11 +233,13 @@ def test_update_session_transcript_lands_on_row_and_fts(tmp_path):
     closed = t.stop("chromium.instance1", position_us=5_000_000, wall_ms=10_000)
     row_id = db.insert_watch_session(closed)
     db.update_session_transcript(row_id, cues_json='[{"start_ms":0}]',
-                                 transcript="Never gonna give you up")
+                                 transcript="Never gonna give you up",
+                                 transcript_source="captions")
 
     detail = db.get_watch_session(row_id)
     assert detail["cues_json"] == '[{"start_ms":0}]'
     assert detail["transcript"] == "Never gonna give you up"
+    assert detail["transcript_source"] == "captions"
 
     total, items = db.search_watch_sessions("gonna give you up")
     assert total == 1
@@ -290,6 +292,7 @@ def test_daemon_attaches_transcript_to_chromium_session(tmp_path):
     assert total == 1
     assert items[0]["transcript"] == "Never gonna give you up"
     assert items[0]["cues_json"] == "[]"
+    assert items[0]["transcript_source"] == "captions"
     assert tools.calls == [("dQw4w9WgXcQ", [[0, 0]])]
 
 

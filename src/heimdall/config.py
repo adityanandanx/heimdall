@@ -50,6 +50,19 @@ class WatchConfig:
 
 
 @dataclass
+class AsrConfig:
+    """Lazy on-demand ASR for subtitle-less sessions (v2 #40).
+
+    faster-whisper runs only via the transcript endpoint, never at capture
+    time; the model loads on first use and is then reused.
+    """
+
+    model: str = "small"
+    device: str = "cpu"
+    compute_type: str = "int8"
+
+
+@dataclass
 class SchedulerConfig:
     day_recap: str = "0 23 * * *"
     time_breakdown: str = "5 23 * * *"
@@ -67,6 +80,7 @@ class Config:
     llama_server: LlamaConfig = field(default_factory=LlamaConfig)
     capture: CaptureConfig = field(default_factory=CaptureConfig)
     watch: WatchConfig = field(default_factory=WatchConfig)
+    asr: AsrConfig = field(default_factory=AsrConfig)
     scheduler: SchedulerConfig = field(default_factory=SchedulerConfig)
     rules: dict = field(default_factory=lambda: {"window_class_category": {"sidra": "Music", "mpv": "Movies"}})
     observability: ObservabilityConfig = field(default_factory=ObservabilityConfig)
@@ -123,7 +137,7 @@ def load_config(path: str | None = None) -> Config:
     with open(path, "r", encoding="utf-8") as fh:
         raw = yaml.safe_load(fh) or {}
 
-    _warn_unknown("", {"data_dir", "api", "llama_server", "capture", "watch", "scheduler", "rules", "observability"}, raw)
+    _warn_unknown("", {"data_dir", "api", "llama_server", "capture", "watch", "asr", "scheduler", "rules", "observability"}, raw)
 
     if "data_dir" in raw:
         cfg.data_dir = Path(raw["data_dir"])
@@ -163,6 +177,14 @@ def load_config(path: str | None = None) -> Config:
             pause_ends_session_s=float(_scalar("pause_ends_session_s", wat, cfg.watch.pause_ends_session_s)),
             poll_interval_s=float(_scalar("poll_interval_s", wat, cfg.watch.poll_interval_s)),
             media_resolver=_scalar("media_resolver", wat, cfg.watch.media_resolver),
+        )
+    if "asr" in raw:
+        asr = raw["asr"] or {}
+        _warn_unknown("asr", {"model", "device", "compute_type"}, asr)
+        cfg.asr = AsrConfig(
+            model=_scalar("model", asr, cfg.asr.model),
+            device=_scalar("device", asr, cfg.asr.device),
+            compute_type=_scalar("compute_type", asr, cfg.asr.compute_type),
         )
     if "scheduler" in raw:
         sch = raw["scheduler"] or {}

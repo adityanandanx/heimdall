@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from datetime import datetime
 
 from fastapi.testclient import TestClient
@@ -436,6 +437,89 @@ def test_sessions_preview_marks_live_rows(api_client: TestClient, db):
     assert "● watching" in r.text  # live-row badge in the row template
     assert " live · " in r.text  # meta counts live vs finished
     assert " finished — auto-refresh 5s" in r.text
+
+
+# ---- /sessions/{id}/transcript (lazy ASR, #40) ----
+
+def _wait_for_transcript(client, sid, timeout=3.0):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        r = client.get(f"/sessions/{sid}/transcript")
+        if r.status_code == 200:
+            return r
+        time.sleep(0.05)
+    raise AssertionError(f"transcript never became ready (last status {r.status_code})")
+
+
+def test_session_transcript_404(api_client):
+    assert api_client.get("/sessions/999999/transcript").status_code == 404
+
+
+def test_session_transcript_returns_stored_captions(api_client, db):
+    sid = _insert_session(db)
+    db.update_session_transcript(sid, cues_json="[]",
+                                 transcript="never gonna give you up",
+                                 transcript_source="captions")
+    r = api_client.get(f"/sessions/{sid}/transcript")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["session_id"] == sid
+    assert body["transcript"] == "never gonna give you up"
+    assert body["transcript_source"] == "captions"
+    assert body["cues_json"] == "[]"
+
+
+def test_session_transcript_409_while_live(api_client, db):
+    row_id = db.insert_live_session(
+        "vlc", "Inception (2010)", "file:///mnt/movies/Inception.mkv", None,
+        ts_start=1_000, pos_start=600_000_000, length=7_200_000_000, ranges=[],
+    )
+    r = api_client.get(f"/sessions/{row_id}/transcript")
+    assert r.status_code == 409
+
+
+def test_session_transcript_422_without_local_file(api_client, db):
+    sid = _insert_session(db, source="https://youtube.com/watch?v=dQw4w9WgXcQ")
+    r = api_client.get(f"/sessions/{sid}/transcript")
+    assert r.status_code == 422
+    assert "local media file" in r.json()["detail"]
+
+
+def test_session_transcript_lazy_asr_flow(api_client, db, monkeypatch):
+    from heimdall.capture.asr import AsrEngine
+
+    sid = _insert_session(db)
+    extracted = []
+
+    def fake_extract(path, ranges):
+        extracted.append((path, ranges))
+        return b"\x00" * 64
+
+    monkeypatch.setattr("heimdall.capture.asr.extract_ranges_pcm", fake_extract)
+    monkeypatch.setattr(AsrEngine, "transcribe", lambda self, pcm: "I watched the movie")
+
+    r = api_client.get(f"/sessions/{sid}/transcript")
+    assert r.status_code == 202
+    body = r.json()
+    assert body["session_id"] == sid
+    assert body["job"]["status"] in ("queued", "running")
+
+    r = _wait_for_transcript(api_client, sid)
+    assert r.status_code == 200
+    body = r.json()
+    assert body["transcript"] == "I watched the movie"
+    assert body["transcript_source"] == "asr"
+    assert body["cues_json"] is None
+    assert extracted == [("/mnt/movies/Inception.mkv", [[600_000_000, 900_000_000]])]
+
+    # completed results are cached: a repeat call returns instantly, no re-run
+    r = api_client.get(f"/sessions/{sid}/transcript")
+    assert r.status_code == 200
+    assert len(extracted) == 1
+
+    # the ASR transcript is searchable through the merged FTS surface
+    hits = api_client.get("/search", params={"q": "watched", "kind": "session"}).json()
+    assert any(it["id"] == sid for it in hits["items"])
 
 
 # ---- /media/live (extension stream, #44) ----

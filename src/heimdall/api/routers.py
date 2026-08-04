@@ -12,7 +12,7 @@ from typing import Any, Literal
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
 from heimdall import __version__
@@ -294,6 +294,21 @@ def session_detail(session_id: int, state: Any = Depends(_state)) -> dict:
     if session is None:
         raise HTTPException(status_code=404, detail=f"session {session_id} not found")
     return _session_iso([session])[0]
+
+
+@sessions_router.get("/sessions/{session_id}/transcript")
+def session_transcript(session_id: int, state: Any = Depends(_state)):
+    """Lazy ASR transcript for a subtitle-less local session (#40).
+
+    Returns the stored transcript (200) when one exists — captions or a prior
+    ASR run — otherwise triggers an async ffmpeg + faster-whisper job and
+    returns 202 with its status. Poll this same endpoint until it returns 200;
+    completed results are cached on the session, so a repeat call never re-runs.
+    """
+    code, body = state.asr.request(session_id)
+    if code == 200:
+        return body
+    return JSONResponse(status_code=code, content=body)
 
 
 @sessions_router.get("/", response_class=HTMLResponse)

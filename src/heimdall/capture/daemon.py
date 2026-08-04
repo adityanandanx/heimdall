@@ -510,6 +510,7 @@ class CaptureDaemon:
                 row_id,
                 cues_json=result["cues_json"],
                 transcript=result["transcript"],
+                transcript_source="captions",
             )
         except Exception:  # noqa: BLE001
             log.warning("transcript persist failed for %s", closed.media_id)
