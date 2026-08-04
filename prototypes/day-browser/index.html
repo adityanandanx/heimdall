@@ -125,6 +125,7 @@
   .ruler span{position:absolute; top:0; transform:translateX(-50%)}
   .track{position:relative; height:56px; background:var(--surface-2); border:1px solid var(--line);
     border-radius:var(--r-md); overflow:hidden; cursor:pointer; touch-action:none; user-select:none}
+  .track.panning{cursor:grabbing}
   .track .hours{position:absolute; inset:0; pointer-events:none}
   .track .hours div{position:absolute; top:0; bottom:0; width:1px; background:var(--line); opacity:.7}
   .track .off{position:absolute; inset:0; pointer-events:none}
@@ -948,23 +949,41 @@ function hidePeek(){
   tipFrame = null;
 }
 peekImgEl.onload = () => peekImgEl.classList.remove('loading');
+/* middle-button drag pans the timeline view (left button still scrubs) */
+let panning = false, panX = 0, panScroll = 0;
+track.addEventListener('mousedown', e => { if(e.button===1) e.preventDefault(); });   // kill native autoscroll
 track.addEventListener('pointerdown', e => {
+  if(e.button === 1){
+    panning = true;
+    panX = e.clientX;
+    panScroll = tape.scrollLeft;
+    hidePeek();
+    try{ track.setPointerCapture(e.pointerId); }catch(_){}
+    track.classList.add('panning');
+    return;
+  }
   dragging = true;
   try{ track.setPointerCapture(e.pointerId); }catch(_){}
   seek(e.clientX);
 });
 track.addEventListener('pointermove', e => {
+  if(panning){
+    e.preventDefault();
+    tape.scrollLeft = Math.max(0, Math.min(panScroll - (e.clientX - panX), Math.max(0, AXIS_W - tape.clientWidth)));
+    return;
+  }
   positionPeek(e.clientX);
   if(dragging) seek(e.clientX);
 });
 track.addEventListener('pointerup', e => {
+  if(panning){ panning = false; track.classList.remove('panning'); return; }
   dragging = false;
   const r = track.getBoundingClientRect();
   const inside = e.clientX>=r.left && e.clientX<=r.right && e.clientY>=r.top && e.clientY<=r.bottom;
   if(!inside) hidePeek();
 });
-track.addEventListener('pointerleave', () => { if(!dragging) hidePeek(); });
-track.addEventListener('pointercancel', () => { dragging = false; hidePeek(); });
+track.addEventListener('pointerleave', () => { if(!dragging && !panning) hidePeek(); });
+track.addEventListener('pointercancel', () => { dragging = false; panning = false; track.classList.remove('panning'); hidePeek(); });
 
 /* keyboard stepping */
 window.addEventListener('keydown', e => {
