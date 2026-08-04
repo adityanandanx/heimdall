@@ -136,6 +136,10 @@ class SessionTracker:
         op.length = length_us
         op.streak_start_wall_ms = wall_ms
         op.paused_at_wall_ms = None
+        elapsed_s = max(0.0, (wall_ms - op.last_poll_wall_ms) / 1000)
+        if is_seek(op.last_poll_pos_us, position_us, elapsed_s):
+            op.ranges.append([op.range_start_us, op.last_poll_pos_us])
+            op.range_start_us = position_us
         op.last_poll_wall_ms = wall_ms
         op.last_poll_pos_us = position_us
         return None

@@ -188,19 +188,25 @@ class CaptureTools:
         """Sliced captions for one closed session: {cues_json, transcript}.
 
         Fetches once per media_id (cached on disk under `captions_dir`) and
-        slices to the merged watched span of `ranges`. Any failure — network,
+        slices to the session's watched sub-ranges — cues sitting entirely in a
+        seek-skipped gap are dropped, never stored. Any failure — network,
         age-gate, removed, still-live, no track — returns None so the session
         stays title-only.
         """
         from heimdall.capture.captions import (CaptionCache, cues_json,
-                                               cues_to_text, watched_span_us)
+                                               cues_to_text, parse_json3,
+                                               slice_cues_to_ranges)
 
         if self._caption_cache is None:
             self._caption_cache = CaptionCache(self.captions_dir)
-        span = watched_span_us(ranges)
-        if span is None:
+        ranges_ms = [[r[0] // 1000, r[1] // 1000] for r in ranges
+                     if r[1] > r[0]]
+        if not ranges_ms:
             return None
-        cues = self._caption_cache.slice_to(media_id, span[0], span[1])
+        events = self._caption_cache.events_for(media_id)
+        if not events:
+            return None
+        cues = slice_cues_to_ranges(parse_json3(events), ranges_ms)
         if not cues:
             return None
         return {"cues_json": cues_json(cues), "transcript": cues_to_text(cues)}

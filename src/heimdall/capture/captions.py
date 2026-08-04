@@ -81,6 +81,28 @@ def slice_cues(cues: list[Cue], start_ms: int, end_ms: int) -> list[Cue]:
     return out
 
 
+def slice_cues_to_ranges(cues: list[Cue], ranges_ms: list[list[int]]) -> list[Cue]:
+    """Keep only cues overlapping any watched sub-range; skipped gaps excluded.
+
+    Each watched sub-range keeps cues overlapping it and clamps its boundary
+    cues (same rule as `slice_cues`); cues sitting entirely inside a skipped
+    gap overlap no range and are dropped. Overlapping ranges contribute a cue
+    once.
+    """
+    kept: list[Cue] = []
+    seen: set[tuple[int, int, str]] = set()
+    for start_ms, end_ms in ranges_ms:
+        if end_ms <= start_ms:
+            continue
+        for cue in slice_cues(cues, start_ms, end_ms):
+            key = (cue.start_ms, cue.end_ms, cue.text)
+            if key not in seen:
+                seen.add(key)
+                kept.append(cue)
+    kept.sort(key=lambda c: (c.start_ms, c.end_ms))
+    return kept
+
+
 def cues_to_text(cues: list[Cue]) -> str:
     """Denormalized plain text for FTS5: one cue per line."""
     return "\n".join(c.text for c in cues)

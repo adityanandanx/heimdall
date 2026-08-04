@@ -17,7 +17,8 @@ import pytest
 from heimdall.capture.captions import (CaptionCache, Cue, cues_json,
                                        cues_to_text, fetch_events,
                                        parse_json3, pick_track_url,
-                                       slice_cues, watched_span_us)
+                                       slice_cues, slice_cues_to_ranges,
+                                       watched_span_us)
 from heimdall.capture.daemon import CaptureDaemon
 from heimdall.capture.sessions import SessionTracker
 from heimdall.config import Config
@@ -114,6 +115,22 @@ def test_watched_span_us_merges_seek_split_sub_ranges():
     assert watched_span_us([[100, 200]]) == (100, 200)
     assert watched_span_us([]) is None
     assert watched_span_us([[100, 100]]) is None
+
+
+def test_slice_cues_to_ranges_excludes_skipped_gap():
+    """A seek-split session (0..3s then 6..9s) keeps no cues from the skipped
+    3..6s gap: the transcript never stores what was not watched."""
+    cues = [_cue(i * 1000, i * 1000 + 900, chr(ord("a") + i)) for i in range(10)]
+    out = slice_cues_to_ranges(cues, [[0, 3000], [6000, 9000]])
+    assert [c.text for c in out] == ["a", "b", "c", "g", "h", "i"]
+    assert all(c.start_ms not in range(3000, 6000) for c in out)
+
+
+def test_slice_cues_to_ranges_overlapping_ranges_dedupe():
+    cues = [_cue(0, 2000, "a"), _cue(1000, 3000, "b")]
+    out = slice_cues_to_ranges(cues, [[0, 2500], [1500, 3000]])
+    assert len(out) == len({(c.start_ms, c.end_ms, c.text) for c in out})
+    assert {c.text for c in out} == {"a", "b"}
 
 
 # ---- track picking + clean failures ----
