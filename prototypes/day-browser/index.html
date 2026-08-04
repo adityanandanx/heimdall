@@ -288,20 +288,6 @@
   .density .b.hot{opacity:.9}
 
   /* --- v3: watched strip + media cards --- */
-  .sessbar{background:var(--surface); border-top:1px solid var(--line); padding:12px 20px 2px}
-  .sessbar-h{display:flex; align-items:baseline; gap:10px; margin-bottom:9px}
-  .sessbar-h .t{font-size:11px; font-weight:750; text-transform:uppercase; letter-spacing:1.2px; color:var(--text-faint)}
-  .sessstrip{display:flex; gap:10px; overflow-x:auto; padding-bottom:8px}
-  .sesscard{flex:0 0 296px; background:var(--surface-2); border:1px solid var(--line); border-left:3px solid var(--pc,#5b8cff);
-    border-radius:var(--r-md); padding:10px 12px; cursor:pointer; transition:border-color var(--m-fast), background var(--m-fast)}
-  .sesscard:hover{border-color:var(--text-dim); background:var(--surface)}
-  .sesscard.hit{box-shadow:0 0 0 2px rgb(255 214 0/.45)}
-  .sc-top{display:flex; gap:8px; align-items:flex-start}
-  .sc-play{color:var(--pc,#5b8cff); font-size:12px; line-height:1.4; flex:0 0 auto}
-  .sc-title{font-weight:600; font-size:13px; line-height:1.35}
-  .sc-meta{display:flex; gap:8px; align-items:center; margin-top:6px; font-size:11px; color:var(--text-dim)}
-  .sc-tx{color:var(--text-faint); font-size:11px; line-height:1.45; margin-top:6px; display:-webkit-box;
-    -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden}
   .chip.vid{color:#ff9d9d; border-color:rgb(255 109 109/.35); background:rgb(255 109 109/.08)}
   .nowwatch{margin-top:12px; background:var(--surface-2); border:1px solid var(--line); border-radius:var(--r-md); padding:10px 12px}
   .nowwatch .t-tl{font-weight:600; font-size:12px; color:#ffd6d6; line-height:1.4}
@@ -349,10 +335,6 @@
   <div class="main">
     <div class="timelineview" id="timelineview">
       <div class="preview" id="preview"><span class="empty muted">loading…</span></div>
-      <div class="sessbar">
-        <div class="sessbar-h"><span class="t">Watched today</span><span class="muted t-sm" id="sessmeta"></span></div>
-        <div class="sessstrip" id="sessstrip"></div>
-      </div>
       <div class="scrubwrap">
         <div class="pl-head">
           <span>Watch timeline</span>
@@ -578,17 +560,6 @@ function openSessionByTitle(t){
   const s = sessions.find(x=>x.title===t);
   if(s) openSession(s);
 }
-function renderWatched(){
-  const tot = media.reduce((a,m)=>a+m.watched_s,0);
-  $('#sessmeta').textContent = `${media.length} videos · ${fmtDur(tot)} watched`;
-  $('#sessstrip').innerHTML = media.slice(0,14).map(m=>`
-    <div class="sesscard" data-title="${esc(m.title)}" style="--pc:${playerColor(m.player)}">
-      <div class="sc-top"><span class="sc-play">▶</span><span class="sc-title">${esc(m.title)}</span></div>
-      <div class="sc-meta"><span class="chip">${esc(m.player.split('.')[0])}</span><span>${fmtDur(m.watched_s)}</span><span class="muted">${(m.n||1)} segment${(m.n||1)>1?'s':''}</span></div>
-      ${m.tx?`<div class="sc-tx">${esc(m.tx.slice(0,140))}</div>`:''}
-    </div>`).join('') || '<div class="muted t-sm">no media captured this day</div>';
-  $('#sessstrip').querySelectorAll('.sesscard').forEach(c=>c.addEventListener('click', ()=>openSessionByTitle(c.dataset.title)));
-}
 function paintNowWatch(f){
   const s = sessionAt(f.ts);
   const m = s ? mediaOf(s) : null;
@@ -605,7 +576,6 @@ function paintNowWatch(f){
   if(b) b.addEventListener('click', ()=>openSession(s));
 }
 function paintSessHits(titles){
-  document.querySelectorAll('.sesscard').forEach(c=>c.classList.toggle('hit', !!(titles && titles.has(c.dataset.title))));
   document.querySelectorAll('.pl-block').forEach(b=>b.classList.toggle('hit', !!(titles && titles.has(b.dataset.title))));
 }
 
@@ -1133,7 +1103,6 @@ $('#prevday').addEventListener('click', ()=>alert('prototype: previous day — n
 $('#nextday').addEventListener('click', ()=>alert('prototype: you are at the newest day.'));
 
 /* ---------- init ---------- */
-renderWatched();
 select(frames[frames.length-1]);
 </script>
 </body>
