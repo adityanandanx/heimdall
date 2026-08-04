@@ -469,9 +469,9 @@ const srcOf = f => (f.a11y_text||'').trim() ? 'a11y' : (f.ocr_text||'').trim() ?
 
 /* ---------- data ---------- */
 const frames = [...DATA.items].sort((a,b)=>a.ts-b.ts);
-const t0 = frames[0].ts, t1 = frames[frames.length-1].ts;
-const dur = new Date(t1) - new Date(t0);
-const dayStr = new Date(t1).toLocaleDateString([], {weekday:'short', month:'short', day:'numeric', year:'numeric'});
+let t0 = frames[0].ts, t1 = frames[frames.length-1].ts;
+let dur = new Date(t1) - new Date(t0);
+let dayStr = new Date(t1).toLocaleDateString([], {weekday:'short', month:'short', day:'numeric', year:'numeric'});
 /* a gap longer than this between captures means the laptop was off/idle:
    it splits app chapters and media runs, and marks the off stretch */
 const OFF_MIN = 8*60*1000;
@@ -493,7 +493,7 @@ function clsColor(cls){
 }
 const sessions = [...SESSIONS].sort((a,b)=>new Date(a.ts0)-new Date(b.ts0));
 const media = [...MEDIA];
-const musicSessions = sessions.filter(s=>s.player==='sidra');
+let musicSessions = sessions.filter(s=>s.player==='sidra');
 function watchedMin(s){ return (s.ranges||[]).reduce((a,[b,e])=>a+Math.max(0,(e-b)),0)/1e6/60; }
 function fmtDur(sec){ sec=Math.round(sec||0); if(sec>=3600) return `${Math.floor(sec/3600)}h ${Math.round((sec%3600)/60)}m`; return `${Math.max(1,Math.round(sec/60))}m`; }
 function playerColor(p){ return ({chromium:'#ff6b6b',brave:'#f0a65b',sidra:'#3ecf8e',vlc:'#37c2d6'}[String(p).split('.')[0]]) || '#5b8cff'; }
@@ -600,7 +600,7 @@ function paintSessHits(titles){
 }
 
 /* ---------- synthesized recap ---------- */
-(function(){
+function renderRecap(){
   const c={}; for(const f of frames) c[f.window_class]=(c[f.window_class]||0)+1;
   const top=Object.entries(c).sort((a,b)=>b[1]-a[1]).slice(0,3).map(([k,n])=>`${k} (${n} captures)`);
   const tot=media.reduce((a,m)=>a+m.watched_s,0);
@@ -608,12 +608,13 @@ function paintSessHits(titles){
   $('#recap').innerHTML =
     `<div class="t"><span>▶</span> ${tot?`You watched ${fmtDur(tot)} of media`:'A quiet screen'}</div>
      <p>${tot?`Across ${media.length} videos — the big ones: ${esc(topVids.join(', '))}. `:''}Most time was spent in ${esc(top.join(', '))}.${musicSessions.length?` ${musicSessions.length} music segments played on sidra.`:''}</p>
-     <div class="foot">synthesized from the embedded snapshot · the recap pipe replaces this in the build</div>`;
-})();
+     <div class="foot">synthesized live from /sessions · the recap pipe replaces this in the build</div>`;
+}
+renderRecap();
 
 /* ---------- app breakdown (click to filter the timeline) ---------- */
 let appFilter = null;
-(function(){
+function renderApps(){
   const c = {};
   for(const f of frames) c[f.window_class] = (c[f.window_class]||0) + 1;
   const rows = Object.entries(c).sort((a,b)=>b[1]-a[1]);
@@ -629,15 +630,16 @@ let appFilter = null;
         <div class="bar"><i style="width:${n/max*100}%;background:${clsColor(cls)}"></i></div>
       </div>
     </div>`).join('');
-  $('#apps').addEventListener('click', e => {
-    const row = e.target.closest('.approw');
-    if(!row) return;
-    const app = row.dataset.app;
-    appFilter = appFilter === app ? null : app;
-    document.querySelectorAll('.approw').forEach(r=>r.classList.toggle('active', r.dataset.app===appFilter));
-    applyAppFilter();
-  });
-})();
+}
+$('#apps').addEventListener('click', e => {
+  const row = e.target.closest('.approw');
+  if(!row) return;
+  const app = row.dataset.app;
+  appFilter = appFilter === app ? null : app;
+  document.querySelectorAll('.approw').forEach(r=>r.classList.toggle('active', r.dataset.app===appFilter));
+  applyAppFilter();
+});
+applyAppFilter();
 function applyAppFilter(){
   document.querySelectorAll('.seg').forEach(s=>s.classList.toggle('dim', !!appFilter && s.title !== appFilter));
   document.querySelectorAll('.track .dot').forEach(d=>{
@@ -1066,7 +1068,7 @@ sessdlg.addEventListener('click', e => { if(e.target===sessdlg) sessdlg.close();
 
 /* ---------- storyboard grid ---------- */
 const gridlist = $('#gridlist');
-(function(){
+function renderGrid(){
   gridlist.innerHTML = frames.map((f,i)=>`
     <div class="griditem" data-i="${i}">
       <img src="${imgOf(f)}" alt="" loading="lazy">
@@ -1078,13 +1080,13 @@ const gridlist = $('#gridlist');
   $('#gridinfo').textContent = `${frames.length} captures · ${fmt(t0)} – ${fmt(t1)}`;
   $('#gridsess').innerHTML = media.slice(0,10).map(m=>
     `<div class="gsess" data-title="${esc(m.title)}" style="--pc:${playerColor(m.player)}">▶ ${esc(m.title.slice(0,30))} <span class="muted">${fmtDur(m.watched_s)}</span></div>`).join('');
-  gridlist.addEventListener('click', e => {
-    const item = e.target.closest('.griditem');
-    if(!item) return;
-    select(frames[+item.dataset.i]);
-    setView('timeline');
-  });
-})();
+}
+gridlist.addEventListener('click', e => {
+  const item = e.target.closest('.griditem');
+  if(!item) return;
+  select(frames[+item.dataset.i]);
+  setView('timeline');
+});
 $('#gridsess').addEventListener('click', e=>{
   const g = e.target.closest('.gsess');
   if(g) openSessionByTitle(g.dataset.title);
@@ -1132,9 +1134,92 @@ $('#copyocr').addEventListener('click', () => {
   });
 });
 
-/* day nav (prototype: single day of data) */
-$('#prevday').addEventListener('click', ()=>alert('prototype: previous day — needs the /days index + order=desc endpoints from the build ticket.'));
-$('#nextday').addEventListener('click', ()=>alert('prototype: you are at the newest day.'));
+/* ---------- live day loading (replaces the embedded snapshot once fetched) ---------- */
+const p2 = n => String(n).padStart(2,'0');
+const dayStrOf = d => `${d.getFullYear()}-${p2(d.getMonth()+1)}-${p2(d.getDate())}`;
+const localISO = d => {
+  const off = -d.getTimezoneOffset(), sg = off >= 0 ? '+' : '-', oa = Math.abs(off);
+  return `${d.getFullYear()}-${p2(d.getMonth()+1)}-${p2(d.getDate())}T${p2(d.getHours())}:${p2(d.getMinutes())}:${p2(d.getSeconds())}${sg}${p2(Math.floor(oa/60))}:${p2(oa%60)}`;
+};
+const shiftDay = (s, n) => { const d = new Date(s+'T12:00:00'); d.setDate(d.getDate()+n); return dayStrOf(d); };
+function aggregateMedia(list){
+  const map = new Map();
+  for(const s of list){
+    const k = s.player + '|' + s.title;
+    let m = map.get(k);
+    if(!m){ m = {player:s.player, title:s.title, src:s.src, watched_s:0, tx:''}; map.set(k, m); }
+    m.watched_s += (s.ranges||[]).reduce((a,[b,e])=>a+Math.max(0,e-b),0)/1e6;
+    m.tx += (s.tx||'').slice(0,20000);
+  }
+  return [...map.values()].sort((a,b)=>b.watched_s-a.watched_s).slice(0,30);
+}
+function renderDay(data){
+  if(!data.frames.length) return false;
+  frames.length = 0; frames.push(...data.frames);
+  sessions.length = 0; sessions.push(...data.sessions);
+  media.length = 0; media.push(...data.media);
+  musicSessions = sessions.filter(s=>s.player==='sidra');
+  t0 = frames[0].ts; t1 = frames[frames.length-1].ts;
+  dur = new Date(t1) - new Date(t0);
+  dayStr = new Date(t1).toLocaleDateString([], {weekday:'short', month:'short', day:'numeric', year:'numeric'});
+  runsCache = null;
+  appFilter = null; hits = null; qEl.value = '';
+  $('#curdate').textContent = dayStr;
+  rebuildAxis();
+  renderRecap();
+  renderApps();
+  renderGrid();
+  applyAppFilter();
+  paintSessHits(null);
+  sel = frames[frames.length-1];
+  select(sel);
+  return true;
+}
+let curDay = null, navBusy = false;
+/* /frames and /sessions cap limit at 100 — page through with offset */
+async function fetchAll(url, q){
+  const out = [];
+  let offset = 0, total = Infinity;
+  while(offset < total){
+    const r = await fetch(`${url}?${q}&offset=${offset}&limit=100`).then(r=>r.json());
+    const items = r.items || [];
+    out.push(...items);
+    total = r.total ?? out.length;
+    if(!items.length) break;
+    offset += items.length;
+  }
+  return out;
+}
+async function loadDay(dateStr){
+  if(navBusy) return;
+  navBusy = true;
+  document.getElementById('prevday').disabled = document.getElementById('nextday').disabled = true;
+  const [y,m,d] = dateStr.split('-').map(Number);
+  const start = new Date(y, m-1, d, 0,0,0,0), end = new Date(y, m-1, d+1, 0,0,0,0);
+  const q = `start=${encodeURIComponent(localISO(start))}&end=${encodeURIComponent(localISO(end))}`;
+  try{
+    const [fr, sr] = await Promise.all([
+      fetchAll(`${API}/frames`, `${q}&order=asc`),
+      fetchAll(`${API}/sessions`, q),
+    ]);
+    const frm = fr.map(f=>({...f, ts:+new Date(f.ts)}));
+    const ses = sr.map(s=>({
+      id:s.id, player:s.player, title:s.media_title, src:s.media_source,
+      ts0:+new Date(s.ts_start), ts1:s.ts_end?+new Date(s.ts_end):+new Date(s.ts_start),
+      ranges:s.ranges||[], tx:s.transcript||'', live:!!s.live,
+    }));
+    if(!frm.length){ navBusy = false; document.getElementById('prevday').disabled = document.getElementById('nextday').disabled = false; alert(`no captures on ${dateStr}`); return; }
+    if(renderDay({frames:frm, sessions:ses, media:aggregateMedia(ses)})) curDay = dateStr;
+  }catch(err){
+    console.error('loadDay failed', err);
+    if(curDay) alert('could not reach the heimdall API — showing the embedded snapshot');
+  }
+  navBusy = false;
+  document.getElementById('prevday').disabled = document.getElementById('nextday').disabled = false;
+}
+$('#prevday').addEventListener('click', ()=>loadDay(shiftDay(curDay, -1)));
+$('#nextday').addEventListener('click', ()=>loadDay(shiftDay(curDay, 1)));
+loadDay(dayStrOf(new Date()));
 
 /* ---------- init ---------- */
 select(frames[frames.length-1]);
