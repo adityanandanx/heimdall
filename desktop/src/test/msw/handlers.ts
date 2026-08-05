@@ -146,6 +146,17 @@ export const searchFixtures = [
         kind: "frame",
     },
     {
+        id: 3,
+        ts: localISO(at(11, 0)),
+        window_class: "browser",
+        window_title: "PNG spec",
+        workspace: 1,
+        image_path: "/tmp/heimdall/frames/3.png",
+        snippet: "portable network graphics — **images**",
+        score: 0.7,
+        kind: "frame",
+    },
+    {
         id: 21,
         ts: localISO(at(10, 0)),
         window_class: "sidra",
@@ -161,6 +172,7 @@ export const searchFixtures = [
 // Which text source each search fixture won by, for the source= filter.
 const searchSources: Record<number, "a11y" | "ocr" | "session"> = {
     2: "a11y",
+    3: "ocr",
     21: "session",
 };
 
@@ -241,7 +253,7 @@ export const handlers = [
         if (source === "ocr") items = items.filter((s) => searchSources[s.id] === "ocr");
         if (source === "transcript") items = items.filter((s) => searchSources[s.id] === "session");
         if (start) items = items.filter((s) => s.ts >= start);
-        if (end) items = items.filter((s) => s.ts < end);
+        if (end) items = items.filter((s) => s.ts <= end);
         items = [...items].sort((a, b) => (a.ts < b.ts ? 1 : a.ts > b.ts ? -1 : 0));
         return HttpResponse.json({ total: items.length, items });
     }),

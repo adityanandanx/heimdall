@@ -11,7 +11,6 @@ import {
     PRESETS,
     SOURCES,
     withChipRemoved,
-    wouldFetch,
     type ChipId,
     type SearchFilters,
 } from "@/lib/search-filters";
@@ -24,6 +23,9 @@ interface SearchSurfaceProps {
     seed: string;
     onPick: (item: SearchItem) => void;
 }
+
+const CONTROL_CLASS =
+    "rounded-md border border-line bg-surface px-2 py-1 text-[11px] text-dim outline-none focus:border-primary [color-scheme:dark]";
 
 export function SearchSurface({ baseUrl, focusNonce, seed, onPick }: SearchSurfaceProps) {
     const [q, setQ] = useState("");
@@ -50,7 +52,8 @@ export function SearchSurface({ baseUrl, focusNonce, seed, onPick }: SearchSurfa
 
     const query = q.trim();
     const chips = useMemo(() => activeChips(filters), [filters]);
-    const showResults = wouldFetch(filters, q);
+    // Show whatever the query holds right now — no gate to drift from the hook.
+    const showResults = data !== undefined || isFetching;
 
     return (
         <div className="flex h-full flex-col gap-4 overflow-y-auto p-7">
@@ -104,8 +107,14 @@ export function SearchSurface({ baseUrl, focusNonce, seed, onPick }: SearchSurfa
                 <select
                     aria-label="date range preset"
                     value={filters.preset}
-                    onChange={(e) => patch({ preset: e.currentTarget.value as SearchFilters["preset"] })}
-                    className="rounded-md border border-line bg-surface px-2 py-1 text-[11px] text-dim outline-none focus:border-primary [color-scheme:dark]"
+                    onChange={(e) =>
+                        patch({
+                            preset: e.currentTarget.value as SearchFilters["preset"],
+                            start: "",
+                            end: "",
+                        })
+                    }
+                    className={CONTROL_CLASS}
                 >
                     {PRESETS.map((p) => (
                         <option key={p.id} value={p.id}>
@@ -117,21 +126,27 @@ export function SearchSurface({ baseUrl, focusNonce, seed, onPick }: SearchSurfa
                     type="datetime-local"
                     aria-label="start time"
                     value={filters.start}
-                    onChange={(e) => patch({ start: e.currentTarget.value })}
-                    className="rounded-md border border-line bg-surface px-2 py-1 text-[11px] text-dim outline-none focus:border-primary [color-scheme:dark]"
+                    onChange={(e) =>
+                        patch({ start: e.currentTarget.value, preset: "all" })
+                    }
+                    className={CONTROL_CLASS}
                 />
                 <input
                     type="datetime-local"
                     aria-label="end time"
                     value={filters.end}
-                    onChange={(e) => patch({ end: e.currentTarget.value })}
-                    className="rounded-md border border-line bg-surface px-2 py-1 text-[11px] text-dim outline-none focus:border-primary [color-scheme:dark]"
+                    onChange={(e) =>
+                        patch({ end: e.currentTarget.value, preset: "all" })
+                    }
+                    className={CONTROL_CLASS}
                 />
                 <select
                     aria-label="source type"
                     value={filters.source}
-                    onChange={(e) => patch({ source: e.currentTarget.value as SearchFilters["source"] })}
-                    className="rounded-md border border-line bg-surface px-2 py-1 text-[11px] text-dim outline-none focus:border-primary [color-scheme:dark]"
+                    onChange={(e) =>
+                        patch({ source: e.currentTarget.value as SearchFilters["source"] })
+                    }
+                    className={CONTROL_CLASS}
                 >
                     {SOURCES.map((s) => (
                         <option key={s.id} value={s.id}>

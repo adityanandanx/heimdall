@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SearchSurface } from "./search-surface";
 import { base, searchRequestUrls } from "@/test/msw/handlers";
 import { renderWithQuery } from "@/test/render";
+import { dayBoundsISO, localISO } from "@/lib/timeline";
 
 function renderSearch() {
     const onPick = vi.fn();
@@ -143,13 +144,44 @@ describe("SearchSurface", () => {
         expect(screen.getByText(/08-01 00:00 → 08-02 00:00/)).toBeInTheDocument();
     });
 
-    it("pins the source=a11y|ocr|transcript gates", async () => {
+    it("lets a preset replace a stale custom range", async () => {
         renderSearch();
-        fireEvent.change(screen.getByLabelText("search query"), { target: { value: "heimdall" } });
-        expect(await screen.findByText("Heimdall docs")).toBeInTheDocument();
+        const urls = searchRequestUrls;
+        fireEvent.change(screen.getByLabelText("start time"), {
+            target: { value: "2026-08-01T00:00" },
+        });
+        await waitFor(() => expect(urls.length).toBeGreaterThan(0));
+        fireEvent.change(screen.getByLabelText("date range preset"), {
+            target: { value: "today" },
+        });
+        await waitFor(() => expect(urls.length).toBeGreaterThan(1));
+        const todayStart = dayBoundsISO(localISO(new Date()).slice(0, 10)).start;
+        const params = new URL(urls[urls.length - 1]).searchParams;
+        expect(params.get("start")).toBe(todayStart);
+        expect(screen.getByLabelText("start time")).toHaveValue(""); // custom cleared
+        expect(screen.getByRole("button", { name: "remove today filter" })).toBeInTheDocument();
+    });
+
+    it("waits out the debounce before issuing a request", async () => {
+        renderSearch();
+        fireEvent.change(screen.getByLabelText("search query"), { target: { value: "roger" } });
+        await new Promise((resolve) => setTimeout(resolve, 150));
+        expect(searchRequestUrls).toHaveLength(0); // 150ms < 250ms
+        expect(await screen.findByText("watch session")).toBeInTheDocument();
+        expect(searchRequestUrls).toHaveLength(1);
+    });
+
+    it("pins the source=a11y|ocr|transcript gates in browse mode", async () => {
+        renderSearch();
         fireEvent.change(screen.getByLabelText("source type"), { target: { value: "ocr" } });
-        expect(await screen.findByText("No matches.")).toBeInTheDocument();
+        expect(await screen.findByText("PNG spec")).toBeInTheDocument();
+        expect(screen.queryByText("Heimdall docs")).not.toBeInTheDocument();
         fireEvent.change(screen.getByLabelText("source type"), { target: { value: "a11y" } });
         expect(await screen.findByText("Heimdall docs")).toBeInTheDocument();
+        expect(screen.queryByText("PNG spec")).not.toBeInTheDocument();
+        fireEvent.change(screen.getByLabelText("source type"), { target: { value: "transcript" } });
+        expect(await screen.findByText("watch session")).toBeInTheDocument();
+        expect(screen.queryByText("Heimdall docs")).not.toBeInTheDocument();
+        expect(screen.queryByText("PNG spec")).not.toBeInTheDocument();
     });
 });
