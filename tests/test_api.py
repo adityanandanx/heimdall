@@ -26,6 +26,19 @@ def test_health(api_client: TestClient):
     assert body["uptime_s"] >= 0
 
 
+# ---- / (day browser UI) ----
+
+def test_root_serves_day_browser(api_client: TestClient):
+    r = api_client.get("/")
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/html")
+    assert "heimdall · day browser" in r.text
+    assert "loadDay" in r.text
+    # same-origin API: no hardcoded host, no embedded snapshot
+    assert "127.0.0.1" not in r.text
+    assert "embedded data snapshot" not in r.text
+
+
 # ---- /search ----
 
 def test_search_shape(api_client: TestClient):
@@ -401,16 +414,6 @@ def test_sessions_filters_and_pagination(api_client: TestClient, db):
     assert api_client.get("/sessions", params={"start": "not-a-date"}).status_code == 422
 
 
-def test_sessions_preview_page(api_client: TestClient):
-    """The loopback preview renders GET /sessions live (user request 2026-08-03)."""
-    r = api_client.get("/")
-    assert r.status_code == 200
-    assert r.headers["content-type"].startswith("text/html")
-    assert "watch sessions" in r.text
-    assert "auto-refresh" in r.text
-    assert "/sessions" in r.text
-
-
 def test_sessions_live_row_renders_null_ts_end(api_client: TestClient, db):
     """An in-progress session is exposed as live: 1 with ts_end: null (#35+)."""
     db.insert_live_session(
@@ -423,20 +426,6 @@ def test_sessions_live_row_renders_null_ts_end(api_client: TestClient, db):
     assert item["live"] == 1
     assert item["ts_end"] is None
     assert datetime.fromisoformat(item["ts_start"]).tzinfo is not None
-
-
-def test_sessions_preview_marks_live_rows(api_client: TestClient, db):
-    """The preview shows live rows with a watching badge and a live/finished
-    meta line instead of a bare session count (#35+)."""
-    _insert_session(db)  # a finished session
-    db.insert_live_session(
-        "sidra", "Awake", None, None,
-        ts_start=2_000, pos_start=0, length=600_000_000, ranges=[],
-    )
-    r = api_client.get("/")
-    assert "● watching" in r.text  # live-row badge in the row template
-    assert " live · " in r.text  # meta counts live vs finished
-    assert " finished — auto-refresh 5s" in r.text
 
 
 # ---- /sessions/{id}/transcript (lazy ASR, #40) ----

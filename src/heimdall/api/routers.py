@@ -29,8 +29,8 @@ search_router = APIRouter()
 frames_router = APIRouter()
 pipes_router = APIRouter()
 status_router = APIRouter()
-sessions_router = APIRouter()
 capture_router = APIRouter()
+sessions_router = APIRouter()
 
 MAX_LIMIT = 100
 DEFAULT_LIMIT = 20
@@ -202,6 +202,57 @@ def frame_image(frame_id: int, state: Any = Depends(_state)):
     return FileResponse(image, media_type="image/jpeg")
 
 
+@capture_router.post("/capture")
+def manual_capture(state: Any = Depends(_state)) -> dict:
+    """Trigger one capture of the active window now (`heimdall capture`).
+
+    Writes a fresh request to `capture.request`, which the capture daemon
+    polls; waits for its ack on `capture.ack`, then for the extracted text
+    (a11y or OCR, populated asynchronously). Errors: no daemon -> 503, capture
+    failure -> 500, the request times out after ~30s.
+    """
+    config: Config = state.config
+    rid = uuid.uuid4().hex
+    now_ms = int(time.time() * 1000)
+    try:
+        (config.data_path / "capture.request").write_text(
+            json.dumps({"id": rid, "ts": now_ms}))
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"cannot write capture request: {exc}")
+
+    ack_path = config.data_path / "capture.ack"
+    frame_id: int | None = None
+    deadline = time.time() + 30.0
+    while time.time() < deadline:
+        try:
+            ack = json.loads(ack_path.read_text())
+        except (FileNotFoundError, ValueError):
+            ack = None
+        if ack and ack.get("id") == rid:
+            if ack.get("status") == "error":
+                raise HTTPException(status_code=500,
+                                    detail=ack.get("detail") or "capture failed")
+            frame_id = ack.get("frame_id")
+            break
+        time.sleep(0.2)
+    if frame_id is None:
+        raise HTTPException(
+            status_code=503,
+            detail="capture daemon not responding (is scripts/start-capture.sh running?)",
+        )
+
+    frame = state.db.get_frame(frame_id)
+    if frame is None:
+        raise HTTPException(status_code=404, detail=f"frame {frame_id} not found")
+    deadline = time.time() + 10.0
+    while not (frame.get("a11y_text") or frame.get("ocr_text")) and time.time() < deadline:
+        time.sleep(0.3)
+        frame = state.db.get_frame(frame_id)
+        if frame is None:
+            break
+    return _iso([frame])[0]
+
+
 @pipes_router.get("/pipes")
 def list_pipes() -> dict:
     return {"names": registered_pipes()}
@@ -341,17 +392,6 @@ def session_transcript(session_id: int, state: Any = Depends(_state)):
     return JSONResponse(status_code=code, content=body)
 
 
-@sessions_router.get("/", response_class=HTMLResponse)
-def sessions_preview(state: Any = Depends(_state)) -> HTMLResponse:
-    """Minimal read-only preview of watch sessions (user request, 2026-08-03).
-
-    Loopback-only like the rest of the API; the page just renders GET /sessions
-    live with a client-side auto-refresh. `transcript` renders when the #41
-    merged search starts supplying it — GET /sessions stays the data contract.
-    """
-    return HTMLResponse(PREVIEW_HTML)
-
-
 def _capture_status(config: Config, now_ms: int) -> tuple[bool, int | None]:
     """Capture daemon aliveness from the heartbeat file.
 
@@ -396,92 +436,6 @@ def _list_media_players() -> list[dict]:
     return players
 
 
-PREVIEW_HTML = """<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<title>heimdall — watch sessions</title>
-<style>
-  body { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; margin: 2rem; background: #111; color: #ddd; }
-  h1 { font-size: 1.1rem; color: #8af; }
-  table { border-collapse: collapse; width: 100%; font-size: 0.85rem; }
-  th, td { text-align: left; padding: 0.4rem 0.6rem; border-bottom: 1px solid #2a2a2a; vertical-align: top; }
-  th { color: #888; font-weight: 600; position: sticky; top: 0; background: #111; }
-  .player { color: #9f9; }
-  .src { color: #f90; word-break: break-all; }
-  .ranges { color: #cc8; }
-  .span { color: #8af; white-space: nowrap; }
-  .transcript { color: #aaa; max-width: 40rem; }
-  .badge { color: #0c0; font-size: 0.75rem; }
-  .badge.paused { color: #f90; }
-  #meta { color: #888; margin: 0.4rem 0 1rem; }
-</style>
-</head>
-<body>
-<h1>heimdall — watch sessions</h1>
-<div id="meta">loading…</div>
-<table>
-<thead><tr>
-  <th>when</th><th>player</th><th>title</th><th>source</th>
-  <th>watched</th><th>wall</th><th>transcript</th>
-</tr></thead>
-<tbody id="rows"></tbody>
-</table>
-<script>
-const $rows = document.getElementById("rows");
-const $meta = document.getElementById("meta");
-
-function fmtVideo(us) {
-  let s = Math.max(0, Math.floor((us || 0) / 1e6));
-  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
-  return h ? h + ":" + String(m).padStart(2, "0") + ":" + String(sec).padStart(2, "0")
-           : m + ":" + String(sec).padStart(2, "0");
-}
-function fmtWall(a, b) {
-  const end = b == null ? new Date() : new Date(b);   // live rows run to "now"
-  const ms = Math.max(0, end - new Date(a));
-  const s = Math.floor(ms / 1000), m = Math.floor(s / 60), h = Math.floor(m / 60);
-  return (h ? h + "h" : "") + (m % 60) + "m" + String(s % 60).padStart(2, "0") + "s";
-}
-function esc(s) {
-  return String(s == null ? "" : s).replace(/[&<>"']/g, c =>
-    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-}
-async function refresh() {
-  try {
-    const r = await fetch("/sessions?limit=50");
-    const body = await r.json();
-    const live = body.items.filter(it => it.live).length;
-    $meta.textContent = body.total + " watch session(s) — " + live + " live · "
-      + (body.total - live) + " finished — auto-refresh 5s";
-    const rows = body.items.map(it => {
-      const ranges = (it.ranges || []).map(r => fmtVideo(r[0]) + "–" + fmtVideo(r[1])).join(", ") || "—";
-      const src = it.media_source ? '<span class="src">' + esc(it.media_source) + "</span>" : "—";
-      const badge = it.live
-        ? (it.paused
-            ? '<span class="badge paused">● paused</span> '
-            : '<span class="badge">● watching</span> ')
-        : "";
-      const title = badge + esc(it.media_title);
-      return "<tr><td>" + esc(it.ts_start) + "</td>"
-        + '<td class="player">' + esc(it.player) + "</td>"
-        + "<td>" + title + "</td>"
-        + "<td>" + src + "</td>"
-        + '<td class="ranges">' + esc(ranges) + "</td>"
-        + '<td class="span">' + fmtWall(it.ts_start, it.ts_end) + "</td>"
-        + '<td class="transcript">' + (it.transcript && !it.live ? esc(it.transcript) : "") + "</td></tr>";
-    }).join("");
-    $rows.innerHTML = rows || '<tr><td colspan="7">no sessions yet</td></tr>';
-  } catch (e) { /* keep the last table on transient errors */ }
-}
-refresh();
-setInterval(refresh, 5000);
-</script>
-</body>
-</html>
-"""
-
-
 def _llama_reachable(base_url: str, transport: httpx.AsyncBaseTransport | None) -> bool:
     try:
         with httpx.Client(base_url=base_url, timeout=2.0, transport=transport or httpx.HTTPTransport()) as c:
@@ -489,54 +443,3 @@ def _llama_reachable(base_url: str, transport: httpx.AsyncBaseTransport | None) 
             return r.status_code == 200
     except Exception:
         return False
-
-
-@capture_router.post("/capture")
-def manual_capture(state: Any = Depends(_state)) -> dict:
-    """Trigger one capture of the active window now (`heimdall capture`).
-
-    Writes a fresh request to `capture.request`, which the capture daemon
-    polls; waits for its ack on `capture.ack`, then for the extracted text
-    (a11y or OCR, populated asynchronously). Errors: no daemon -> 503, capture
-    failure -> 500, the request times out after ~30s.
-    """
-    config: Config = state.config
-    rid = uuid.uuid4().hex
-    now_ms = int(time.time() * 1000)
-    try:
-        (config.data_path / "capture.request").write_text(
-            json.dumps({"id": rid, "ts": now_ms}))
-    except OSError as exc:
-        raise HTTPException(status_code=500, detail=f"cannot write capture request: {exc}")
-
-    ack_path = config.data_path / "capture.ack"
-    frame_id: int | None = None
-    deadline = time.time() + 30.0
-    while time.time() < deadline:
-        try:
-            ack = json.loads(ack_path.read_text())
-        except (FileNotFoundError, ValueError):
-            ack = None
-        if ack and ack.get("id") == rid:
-            if ack.get("status") == "error":
-                raise HTTPException(status_code=500,
-                                    detail=ack.get("detail") or "capture failed")
-            frame_id = ack.get("frame_id")
-            break
-        time.sleep(0.2)
-    if frame_id is None:
-        raise HTTPException(
-            status_code=503,
-            detail="capture daemon not responding (is scripts/start-capture.sh running?)",
-        )
-
-    frame = state.db.get_frame(frame_id)
-    if frame is None:
-        raise HTTPException(status_code=404, detail=f"frame {frame_id} not found")
-    deadline = time.time() + 10.0
-    while not (frame.get("a11y_text") or frame.get("ocr_text")) and time.time() < deadline:
-        time.sleep(0.3)
-        frame = state.db.get_frame(frame_id)
-        if frame is None:
-            break
-    return _iso([frame])[0]
