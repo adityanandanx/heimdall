@@ -16,6 +16,14 @@ log = logging.getLogger("heimdall.capture")
 _engine: object | None = None
 _missing_logged = False
 
+# OCR is a background fallback; cap onnxruntime's thread pool so the extraction
+# worker stops pinning every core (heat/battery). Breaks no perf contract: the
+# queue never blocks a capture, so per-frame latency is not user-visible.
+_ORT_THREAD_PARAMS = {
+    "EngineConfig.onnxruntime.intra_op_num_threads": 2,
+    "EngineConfig.onnxruntime.inter_op_num_threads": 1,
+}
+
 
 def rapid_ocr(img: bytes) -> Optional[str]:
     """Recognize text in a frame image; None on error or no text.
@@ -34,7 +42,7 @@ def rapid_ocr(img: bytes) -> Optional[str]:
                 _missing_logged = True
             return None
         try:
-            _engine = RapidOCR()
+            _engine = RapidOCR(params=_ORT_THREAD_PARAMS)
         except Exception as exc:  # noqa: BLE001
             if not _missing_logged:
                 log.warning("rapidocr init failed; OCR fallback disabled: %s", exc)
