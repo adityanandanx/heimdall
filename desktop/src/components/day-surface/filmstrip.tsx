@@ -59,6 +59,20 @@ export function Filmstrip({ baseUrl, frames, sessions, selected, onSelect, onMed
     const anchorKeepRef = useRef(-1);
     const hoverIdRef = useRef<number | null>(null);
     const [hov, setHov] = useState<HoverState | null>(null);
+    const [viewW, setViewW] = useState(0);
+
+    // Track the scroll viewport width so the trailing pad lets the last
+    // capture scroll all the way to the middle of the timeline.
+    useLayoutEffect(() => {
+        const el = scrollRef.current;
+        if (!el) return;
+        const update = () => setViewW(el.clientWidth);
+        update();
+        if (typeof ResizeObserver === "undefined") return;
+        const ro = new ResizeObserver(update);
+        ro.observe(el);
+        return () => ro.disconnect();
+    }, []);
 
     const runs = useMemo(() => buildRuns(sessions), [sessions]);
     const laneRuns = useMemo(() => assignLanes(runs), [runs]);
@@ -85,6 +99,13 @@ export function Filmstrip({ baseUrl, frames, sessions, selected, onSelect, onMed
 
     const timelineH = DOTS_ROW_H + lanes * LANE_H + 6;
 
+    const contentW = axis.length ? axisW : 100;
+    const padEnd = axis.length ? Math.ceil(viewW / 2) : 0;
+    const scrollLimit = () => {
+        const el = scrollRef.current;
+        return el ? Math.max(0, contentW + padEnd - el.clientWidth) : 0;
+    };
+
     // Zoom-anchor: keep the span under the cursor stable across ppm changes.
     useLayoutEffect(() => {
         const el = scrollRef.current;
@@ -92,9 +113,9 @@ export function Filmstrip({ baseUrl, frames, sessions, selected, onSelect, onMed
         const idx = anchorIdxRef.current;
         const s = axis[Math.min(idx, axis.length - 1)];
         const target = s.x0 + anchorFracRef.current * (s.x1 - s.x0);
-        el.scrollLeft = clamp(target - anchorKeepRef.current, 0, Math.max(0, axisW - el.clientWidth));
+        el.scrollLeft = clamp(target - anchorKeepRef.current, 0, scrollLimit());
         anchorKeepRef.current = -1;
-    }, [axis, axisW]);
+    }, [axis, axisW, contentW, padEnd]);
 
     function zoomBy(factor: number, anchorClientX?: number) {
         const el = scrollRef.current;
@@ -168,11 +189,11 @@ export function Filmstrip({ baseUrl, frames, sessions, selected, onSelect, onMed
                 ref={scrollRef}
                 className="overflow-x-auto overflow-y-hidden pb-1.5 [scrollbar-width:thin]"
             >
-                <div className="relative" style={{ width: Math.max(axisW, 100) }}>
+                <div className="relative" style={{ width: contentW + padEnd }}>
                     <div
                         ref={timelineRef}
                         className="relative cursor-pointer touch-none overflow-hidden rounded-md border border-line bg-surface-2 select-none"
-                        style={{ height: timelineH }}
+                        style={{ width: contentW, height: timelineH }}
                         data-testid="filmstrip-timeline"
                         onPointerDown={(e) => {
                             if (e.button !== 0) return;
@@ -210,7 +231,7 @@ export function Filmstrip({ baseUrl, frames, sessions, selected, onSelect, onMed
                             }
                             const el = scrollRef.current;
                             if (el && Math.abs(dx) > 0) {
-                                el.scrollLeft = clamp(el.scrollLeft + dx, 0, Math.max(0, axisW - el.clientWidth));
+                                el.scrollLeft = clamp(el.scrollLeft + dx, 0, scrollLimit());
                             }
                             if (Math.abs(dy) > 0) {
                                 zoomBy(dy < 0 ? 1.25 : 0.8, e.clientX);
