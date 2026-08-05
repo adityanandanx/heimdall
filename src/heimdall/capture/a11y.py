@@ -32,6 +32,8 @@ CONTENT_MIN_NODES = 5
 CLASS_HINTS = {
     "google-chrome": ["google chrome", "chrome"],
     "chromium": ["chromium"],
+    "brave-browser": ["brave"],
+    "discord": ["discord"],
     "thunar": ["thunar"],
     "vlc": ["vlc"],
     "sidra": ["sidra"],
@@ -104,6 +106,20 @@ def _atspi():
         return None
 
 
+def class_hints(window_class: str) -> list[str]:
+    """Hint names to narrow the AT-SPI bus search for a window class.
+
+    Exact hint key wins; otherwise a key contained in the class matches too
+    (e.g. `md.Obsidian` -> the `obsidian`/`electron` hints, so the reader does
+    not scan the whole desktop). Empty list means "scan every app on the bus".
+    """
+    exact = CLASS_HINTS.get(window_class or "", [])
+    if exact:
+        return exact
+    wc = (window_class or "").lower()
+    return next((hints for key, hints in CLASS_HINTS.items() if key in wc), [])
+
+
 def read_window_tree(window_class: str, window_title: str) -> list[dict] | None:
     """AT-SPI tree for the window matching (class, title), normalized.
 
@@ -115,7 +131,7 @@ def read_window_tree(window_class: str, window_title: str) -> list[dict] | None:
     if atspi is None:
         return None
     desktop = atspi.get_desktop(0)
-    hints = CLASS_HINTS.get(window_class or "", [])
+    hints = class_hints(window_class)
     candidates: list[int] = []
     for i in range(desktop.get_child_count()):
         try:

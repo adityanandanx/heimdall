@@ -114,6 +114,7 @@ heimdall sessions [--player --start --end --limit --offset --json]
 heimdall recap [today|yesterday|YYYY-MM-DD]
 heimdall breakdown [day] [--days N] [--json]
 heimdall status [--json]
+heimdall capture [--json]
 heimdall run <pipe> [--day today]
 heimdall serve
 ```

@@ -174,3 +174,26 @@ def test_flatten_text_joins_real_text_in_order():
 
 def test_flatten_text_empty_tree():
     assert flatten_text([]) == ""
+
+
+# ---- CLASS_HINTS coverage canary (#a11y-collection) ----
+
+def test_class_hints_cover_browser_and_electron_classes():
+    """Every window class heimdall targets with the AT-SPI reader must have a
+    bus-search hint, so a populated Chromium/Electron tree is actually found."""
+    from heimdall.capture.a11y import CLASS_HINTS
+
+    for cls in ("google-chrome", "chromium", "brave-browser", "discord",
+                "code", "obsidian", "sidra", "vlc", "kitty", "thunar"):
+        assert cls in CLASS_HINTS, f"{cls!r} missing from CLASS_HINTS"
+
+
+def test_class_hints_fallback_matches_qualified_class_names():
+    """`md.Obsidian` (and other <toolkit>.<app> classes) must resolve to the
+    right hints — otherwise the reader scans the whole desktop per frame."""
+    from heimdall.capture.a11y import class_hints
+
+    assert class_hints("google-chrome") == ["google chrome", "chrome"]
+    assert class_hints("md.Obsidian") == ["obsidian", "electron"]
+    assert class_hints("obsidian") == ["obsidian", "electron"]
+    assert class_hints("net.windmill.windmill") == []  # unknown -> full scan

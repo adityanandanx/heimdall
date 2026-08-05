@@ -18,8 +18,8 @@ from heimdall.config import Config
 from heimdall.db import Database, init_db
 from heimdall.pipes.llm import LlmClient
 from heimdall.scheduler import start_scheduler as start_scheduler_fn
-from heimdall.api.routers import (health_router, search_router, frames_router,
-                                  pipes_router, status_router, sessions_router)
+from heimdall.api.routers import (capture_router, health_router, search_router,
+                                  frames_router, pipes_router, status_router, sessions_router)
 from heimdall.capture.asr import AsrManager
 
 
@@ -51,6 +51,7 @@ def create_app(config: Config, *, db_path: str | Path | None = None,
     app.include_router(pipes_router)
     app.include_router(status_router)
     app.include_router(sessions_router)
+    app.include_router(capture_router)
 
     if start_scheduler:
         start_scheduler_fn(app)

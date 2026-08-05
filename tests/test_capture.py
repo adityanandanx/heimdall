@@ -126,6 +126,131 @@ def test_mpris_paused_states_never_capture(tmp_path):
     assert daemon.jobs.qsize() == 1
 
 
+# ---- manual capture (heimdall capture -> /capture -> capture.request) ----
+
+def test_manual_capture_request_enqueues_job(tmp_path):
+    """A fresh request file makes the daemon enqueue a `manual` capture."""
+    import json
+    import time
+    from heimdall.capture.daemon import CaptureDaemon
+    from heimdall.config import Config
+
+    daemon = CaptureDaemon(Config(data_dir=tmp_path))
+    daemon.manual_request.write_text(json.dumps(
+        {"id": "abc", "ts": int(time.time() * 1000)}))
+    daemon._check_manual()
+    assert daemon._manual_pending is True
+    assert daemon._manual_rid == "abc"
+    assert daemon.jobs.qsize() == 1
+    trigger, _ = daemon.jobs.get()
+    assert trigger == "manual"
+
+
+def test_manual_capture_ignores_stale_and_repeat_requests(tmp_path):
+    import json
+    import time
+    from heimdall.capture.daemon import CaptureDaemon
+    from heimdall.config import Config
+
+    daemon = CaptureDaemon(Config(data_dir=tmp_path))
+    daemon.manual_request.write_text(json.dumps(
+        {"id": "stale", "ts": int(time.time() * 1000) - 60_000}))
+    daemon._check_manual()
+    assert daemon.jobs.qsize() == 0  # older than MANUAL_REQUEST_MAX_AGE_MS -> ignored
+
+    daemon.manual_request.write_text(json.dumps(
+        {"id": "dup", "ts": int(time.time() * 1000)}))
+    daemon._check_manual()
+    daemon._check_manual()
+    assert daemon.jobs.qsize() == 1  # same id only enqueues once
+
+
+def test_manual_capture_ack_does_not_refire_same_request(tmp_path):
+    """The request file persists after ack; the daemon must not treat it as a
+    fresh request on the next poll (the 0.5s re-fire storm)."""
+    import json
+    import time
+    from heimdall.capture.daemon import CaptureDaemon
+    from heimdall.config import Config
+
+    daemon = CaptureDaemon(Config(data_dir=tmp_path))
+    daemon.manual_request.write_text(json.dumps(
+        {"id": "abc", "ts": int(time.time() * 1000)}))
+    daemon._check_manual()
+    assert daemon.jobs.qsize() == 1
+
+    trigger, _ = daemon.jobs.get()
+    daemon._manual_ack(status="ok", frame_id=7)
+    ack = json.loads(daemon.manual_ack.read_text())
+    assert ack == {"id": "abc", "status": "ok", "frame_id": 7, "detail": None}
+
+    daemon._check_manual()
+    daemon._check_manual()
+    assert daemon.jobs.qsize() == 0  # same rid acked -> never re-enqueues
+
+    daemon.manual_request.write_text(json.dumps(
+        {"id": "next", "ts": int(time.time() * 1000)}))
+    daemon._check_manual()
+    assert daemon.jobs.qsize() == 1  # a *new* rid still fires
+
+
+def test_manual_capture_worker_stores_frame_and_acks(tmp_path):
+    """Full worker path: manual bypasses interval + duplicate gates and acks
+    the frame id on capture.request's sibling capture.ack."""
+    import json
+    import threading
+    from heimdall.capture.daemon import CaptureDaemon, CaptureTools
+    from heimdall.config import Config
+    from heimdall.db import init_db
+
+    daemon = CaptureDaemon(Config(data_dir=tmp_path), tools=CaptureTools(
+        activewindow=lambda: {"class": "kitty", "title": "manual test",
+                              "at": [0, 0], "size": [640, 480], "monitor": 0,
+                              "fullscreen": 0},
+        grim=lambda x, y, w, h: b"\xff\xd8\xff\xe0jpeg",
+    ))
+    init_db(path=daemon.db_path)
+    daemon._manual_rid = "rid-1"
+    daemon._manual_pending = True
+    daemon.jobs.put(("manual", 1))
+    daemon.jobs.put(None)
+    t = threading.Thread(target=daemon._capture_worker)
+    t.start()
+    t.join(timeout=5)
+
+    ack = json.loads(daemon.manual_ack.read_text())
+    assert ack["id"] == "rid-1"
+    assert ack["status"] == "ok"
+    assert ack["frame_id"] is not None
+    frame = daemon.db.get_frame(ack["frame_id"])
+    assert frame["window_class"] == "kitty" and frame["trigger"] == "manual"
+    assert daemon._manual_pending is False
+
+
+def test_manual_capture_worker_acks_error_on_missing_window(tmp_path):
+    import json
+    import threading
+    from heimdall.capture.daemon import CaptureDaemon, CaptureTools
+    from heimdall.config import Config
+
+    daemon = CaptureDaemon(Config(data_dir=tmp_path), tools=CaptureTools(
+        activewindow=lambda: None,
+        grim=lambda x, y, w, h: b"jpeg",
+    ))
+    daemon._manual_rid = "rid-2"
+    daemon._manual_pending = True
+    daemon.jobs.put(("manual", 1))
+    daemon.jobs.put(None)
+    t = threading.Thread(target=daemon._capture_worker)
+    t.start()
+    t.join(timeout=5)
+
+    ack = json.loads(daemon.manual_ack.read_text())
+    assert ack == {"id": "rid-2", "status": "error", "frame_id": None,
+                   "detail": "no active window found"}
+    assert daemon._manual_pending is False
+
+
 # ---- span computation ----
 
 def test_compute_spans_consecutive_deltas():

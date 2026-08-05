@@ -6,9 +6,11 @@ All responses are JSON with snake_case fields; errors use FastAPI's
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import subprocess
 import time
+import uuid
 from typing import Any, Literal
 
 import httpx
@@ -28,6 +30,7 @@ frames_router = APIRouter()
 pipes_router = APIRouter()
 status_router = APIRouter()
 sessions_router = APIRouter()
+capture_router = APIRouter()
 
 MAX_LIMIT = 100
 DEFAULT_LIMIT = 20
@@ -486,3 +489,54 @@ def _llama_reachable(base_url: str, transport: httpx.AsyncBaseTransport | None) 
             return r.status_code == 200
     except Exception:
         return False
+
+
+@capture_router.post("/capture")
+def manual_capture(state: Any = Depends(_state)) -> dict:
+    """Trigger one capture of the active window now (`heimdall capture`).
+
+    Writes a fresh request to `capture.request`, which the capture daemon
+    polls; waits for its ack on `capture.ack`, then for the extracted text
+    (a11y or OCR, populated asynchronously). Errors: no daemon -> 503, capture
+    failure -> 500, the request times out after ~30s.
+    """
+    config: Config = state.config
+    rid = uuid.uuid4().hex
+    now_ms = int(time.time() * 1000)
+    try:
+        (config.data_path / "capture.request").write_text(
+            json.dumps({"id": rid, "ts": now_ms}))
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"cannot write capture request: {exc}")
+
+    ack_path = config.data_path / "capture.ack"
+    frame_id: int | None = None
+    deadline = time.time() + 30.0
+    while time.time() < deadline:
+        try:
+            ack = json.loads(ack_path.read_text())
+        except (FileNotFoundError, ValueError):
+            ack = None
+        if ack and ack.get("id") == rid:
+            if ack.get("status") == "error":
+                raise HTTPException(status_code=500,
+                                    detail=ack.get("detail") or "capture failed")
+            frame_id = ack.get("frame_id")
+            break
+        time.sleep(0.2)
+    if frame_id is None:
+        raise HTTPException(
+            status_code=503,
+            detail="capture daemon not responding (is scripts/start-capture.sh running?)",
+        )
+
+    frame = state.db.get_frame(frame_id)
+    if frame is None:
+        raise HTTPException(status_code=404, detail=f"frame {frame_id} not found")
+    deadline = time.time() + 10.0
+    while not (frame.get("a11y_text") or frame.get("ocr_text")) and time.time() < deadline:
+        time.sleep(0.3)
+        frame = state.db.get_frame(frame_id)
+        if frame is None:
+            break
+    return _iso([frame])[0]

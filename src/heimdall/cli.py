@@ -143,6 +143,21 @@ def run(pipe: str, day: str = typer.Option("today", "--day")) -> None:
     _run_and_print(pipe, day)
 
 
+@app.command("capture")
+def capture(json_output: bool = typer.Option(False, "--json")) -> None:
+    """Capture the active window now (asks the capture daemon)."""
+    data = _client(_cfg).post("/capture")
+    if json_output:
+        print(json.dumps(data, ensure_ascii=False, indent=2))
+        return
+    print(f"frame {data['id']} @ {data['ts']} | {data.get('window_class')} | {data.get('window_title')}")
+    text = data.get("a11y_text") or data.get("ocr_text")
+    if text:
+        print(text[:400])
+    else:
+        print("(no text extracted yet)")
+
+
 def _run_and_print(pipe: str, day: str, json_output: bool = False) -> dict:
     result = _client(_cfg).post(f"/pipes/run/{pipe}", {"day": parse_day(day)})
     if json_output:

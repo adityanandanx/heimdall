@@ -604,3 +604,54 @@ def test_status_last_session_and_asr_pending(api_client, db):
     assert last["media_source"] == "file:///mnt/movies/Inception.mkv"
     assert last["ts_end"] == 1_700_001_000_000
     assert body["asr"] == {"queued": 0, "running": 0, "failed": 0, "items": []}
+
+
+# ---- POST /capture (manual capture) ----
+
+def test_manual_capture_returns_frame(tmp_path, monkeypatch):
+    """Writes capture.request, acks the seeded rid, returns the frame row."""
+    import json
+    import uuid
+
+    cfg = Config(data_dir=tmp_path)
+    app = create_app(cfg, db_path=tmp_path / "data.db",
+                     llm_transport=mock_llm_response(RECAP_COMPLETION))
+    monkeypatch.setattr("heimdall.api.routers.uuid.uuid4",
+                        lambda: uuid.UUID(int=1))
+    monkeypatch.setattr("heimdall.api.routers.time.sleep", lambda _: None)
+
+    with TestClient(app) as client:
+        db = client.app.state.db
+        frame_id = db.insert_frame({
+            "ts": 1_700_000_000_000, "monitor": 0, "workspace": 2,
+            "window_class": "kitty", "window_title": "manual",
+            "fullscreen": 0, "trigger": "manual", "image_path": "frames/x.jpg",
+            "image_bytes": 4, "ocr_text": "hello manual capture", "ocr_sec": 1.0,
+            "a11y_text": None, "a11y_json": None, "ocr_engine": None,
+        })
+        (cfg.data_path / "capture.ack").write_text(json.dumps(
+            {"id": uuid.UUID(int=1).hex, "status": "ok", "frame_id": frame_id}))
+
+        r = client.post("/capture")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["id"] == frame_id
+        assert body["window_class"] == "kitty"
+        assert body["ocr_text"] == "hello manual capture"
+        assert (cfg.data_path / "capture.request").exists()
+
+
+def test_manual_capture_503_when_daemon_silent(tmp_path, monkeypatch):
+    import itertools
+
+    monkeypatch.setattr("heimdall.api.routers.time.sleep", lambda _: None)
+    ticks = itertools.count()
+    monkeypatch.setattr("heimdall.api.routers.time.time",
+                        lambda: next(ticks))  # monotonic; advances the 30s deadline
+    cfg = Config(data_dir=tmp_path)
+    app = create_app(cfg, db_path=tmp_path / "data.db",
+                     llm_transport=mock_llm_response(RECAP_COMPLETION))
+    with TestClient(app) as client:
+        r = client.post("/capture")
+    assert r.status_code == 503
+    assert "capture daemon not responding" in r.json()["detail"]

@@ -37,6 +37,10 @@ Trigger = str
 Job = tuple[str, int]  # (trigger, ts_ms)
 ExtractJob = tuple[int, str, str, bytes]  # (frame_id, window_class, window_title, image)
 
+# Manual-capture requests (POST /capture -> capture.request) older than this are
+# stale and ignored on daemon startup, so a leftover file never fires a capture.
+MANUAL_REQUEST_MAX_AGE_MS = 30_000
+
 
 @dataclass
 class CaptureTools:
@@ -272,6 +276,8 @@ class CaptureDaemon:
             )
         self.tools = tools
         self.heartbeat = data / "capture.heartbeat"
+        self.manual_request = data / "capture.request"
+        self.manual_ack = data / "capture.ack"
         self.data = data
         self._stop = threading.Event()
         self._lock = threading.Lock()
@@ -279,6 +285,8 @@ class CaptureDaemon:
         self._last_sig: tuple | None = None
         self._last_track: tuple | None = None
         self._last_track_status: str | None = None
+        self._manual_rid: str | None = None
+        self._manual_pending = False
         self.tracker = SessionTracker(pause_ends_session_s=config.watch.pause_ends_session_s)
         self._excluded_players = set(config.watch.excluded_players)
         self._live_rows: dict[str, int] = {}  # player -> watch_sessions row id
@@ -334,6 +342,57 @@ class CaptureDaemon:
         interval = self.config.capture.keepalive_min * 60
         while not self._stop.wait(interval):
             self.jobs.put(("keepalive", int(time.time() * 1000)))
+
+    def _manual_loop(self) -> None:
+        """Poll the manual-capture request file (`heimdall capture` -> /capture)."""
+        while not self._stop.wait(0.5):
+            self._check_manual()
+
+    def _check_manual(self) -> None:
+        """Enqueue a `manual` capture when a fresh, new request file appears.
+
+        Only one manual capture runs at a time (`_manual_pending`); the capture
+        worker acks it back to `capture.ack` so the API call can return.
+        """
+        if self._manual_pending:
+            return
+        try:
+            payload = json.loads(self.manual_request.read_text())
+        except (FileNotFoundError, ValueError):
+            return
+        if not isinstance(payload, dict):
+            return
+        rid = payload.get("id")
+        ts = payload.get("ts")
+        if not rid or not isinstance(ts, int):
+            return
+        if rid == self._manual_rid or int(time.time() * 1000) - ts > MANUAL_REQUEST_MAX_AGE_MS:
+            return
+        self._manual_rid = rid
+        self._manual_pending = True
+        self.jobs.put(("manual", int(time.time() * 1000)))
+
+    def _manual_ack(self, *, status: str, frame_id: int | None = None,
+                    detail: str | None = None) -> None:
+        """Reply to a manual-capture request (best-effort; capture never fails).
+
+        The request id is kept after acking so the same `capture.request` file
+        is not treated as a fresh request on the next poll — the file is never
+        deleted, so resetting the id here would re-fire a capture every 0.5s
+        until a *different* request id overwrites it.
+        """
+        if self._manual_rid is None:
+            return
+        try:
+            self.manual_ack.write_text(json.dumps({
+                "id": self._manual_rid,
+                "status": status,
+                "frame_id": frame_id,
+                "detail": detail,
+            }))
+        except OSError:
+            pass
+        self._manual_pending = False
 
     def _mpris(self) -> None:
         while not self._stop.is_set():
@@ -530,28 +589,38 @@ class CaptureDaemon:
             if item is None:
                 break
             trigger, ts = item
+            manual = trigger == "manual"
             now = time.monotonic()
             with self._lock:
-                if not should_capture(now, self._last_fire, self.config.capture.min_interval_s):
+                # a manual capture always fires regardless of the interval gate
+                if not manual and not should_capture(now, self._last_fire, self.config.capture.min_interval_s):
                     continue
                 self._last_fire = now
             meta = self.tools.activewindow()
             if not meta:
+                self._manual_ack(status="error", detail="no active window found")
                 continue
             sig = activewindow_signature(meta)
             with self._lock:
-                if is_duplicate(sig, self._last_sig):
+                if not manual and is_duplicate(sig, self._last_sig):
                     continue
                 self._last_sig = sig
             at, size = meta.get("at") or [], meta.get("size") or []
             if len(at) < 2 or len(size) < 2:
+                self._manual_ack(status="error", detail="active window has no geometry")
                 continue
             img = self.tools.grim(int(at[0]), int(at[1]), int(size[0]), int(size[1]))
             if not img:
                 log.warning("grim capture failed")
+                self._manual_ack(status="error", detail="grim capture failed")
                 continue
             frame_id = self._store_frame(ts, meta, trigger, img)
-            if frame_id and self._should_extract(trigger, meta.get("class") or "", img):
+            if frame_id is None:
+                self._manual_ack(status="error", detail="frame not stored")
+                continue
+            if manual:
+                self._manual_ack(status="ok", frame_id=frame_id)
+            if self._should_extract(trigger, meta.get("class") or "", img):
                 self.extract_jobs.put(
                     (frame_id, meta.get("class") or "", meta.get("title") or "", img)
                 )
@@ -653,6 +722,7 @@ class CaptureDaemon:
             threading.Thread(target=self._mpris, name="mpris", daemon=True),
             threading.Thread(target=self._watch_poll, name="watch-poll", daemon=True),
             threading.Thread(target=self._heartbeat_loop, name="heartbeat", daemon=True),
+            threading.Thread(target=self._manual_loop, name="manual", daemon=True),
         ]
         threads += [
             threading.Thread(target=self._capture_worker, name=f"capture-{i}", daemon=True)

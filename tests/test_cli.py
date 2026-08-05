@@ -44,6 +44,12 @@ def mock_api_transport() -> httpx.MockTransport:
                 "output_markdown": "# Time breakdown", "output_path": "output/time-breakdown-2026-08-02.md",
                 "trace_url": "", "frame_count": 3,
             })
+        if path == "/capture":
+            return httpx.Response(200, json={
+                "id": 999, "ts": "2026-08-02T12:00:00+05:30", "window_class": "code",
+                "window_title": "capture.py — heimdall",
+                "a11y_text": None, "ocr_text": "def capture(): pass",
+            })
         if path == "/status":
             return httpx.Response(200, json={
                 "server": {"status": "ok", "version": "0.1.0", "uptime_s": 12},
@@ -220,6 +226,30 @@ def test_sessions_json_flag(config_path, capsys):
     body = json.loads(out)
     assert set(body) == {"total", "items"}
     assert body["total"] == 2
+
+
+def test_capture_renders_frame(config_path, capsys):
+    out = run_cli(["capture"], config_path, mock_api_transport(), capsys)
+    assert "frame 999" in out
+    assert "| code | capture.py — heimdall" in out
+    assert "def capture(): pass" in out
+
+
+def test_capture_no_text_yet(config_path, capsys):
+    transport = httpx.MockTransport(
+        lambda r: httpx.Response(200, json={
+            "id": 999, "ts": "2026-08-02T12:00:00+05:30", "window_class": "code",
+            "window_title": "capture.py — heimdall", "a11y_text": None, "ocr_text": None,
+        }))
+    out = run_cli(["capture"], config_path, transport, capsys)
+    assert "(no text extracted yet)" in out
+
+
+def test_capture_json_flag(config_path, capsys):
+    out = run_cli(["capture", "--json"], config_path, mock_api_transport(), capsys)
+    body = json.loads(out)
+    assert body["window_class"] == "code"
+    assert body["id"] == 999
 
 
 def test_api_error_exits_nonzero(config_path, capsys):
