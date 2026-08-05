@@ -7,7 +7,9 @@ import {
     axisWidth,
     buildAxis,
     buildRuns,
+    clsColor,
     frameNear,
+    playerColor,
     tsOf,
     tsMs,
     type Span,
@@ -237,12 +239,17 @@ export function Filmstrip({ frames, sessions, selected, onSelect, hits, filterCl
                                     <div
                                         key={f.id}
                                         className={cn(
-                                            "absolute size-1.75 -translate-x-1/2 rounded-full bg-faint transition-[background,transform]",
-                                            sel && "scale-[1.7] bg-primary",
-                                            hit && "bg-ok",
+                                            "absolute size-1.75 -translate-x-1/2 rounded-full ring-2 transition-[background,transform]",
+                                            sel && "scale-[1.7]",
+                                            hit && "ring-ok",
+                                            sel && !hit && "ring-background/90",
                                             muted && "opacity-25",
                                         )}
-                                        style={{ left: axisOf(axis, f.ts), top: "50%" }}
+                                        style={{
+                                            left: axisOf(axis, f.ts),
+                                            top: "50%",
+                                            background: clsColor(f.window_class),
+                                        }}
                                     />
                                 );
                             })}
@@ -252,28 +259,24 @@ export function Filmstrip({ frames, sessions, selected, onSelect, hits, filterCl
                             const a = axisOf(axis, r.start);
                             const b = Math.max(axisOf(axis, r.end), a + 8);
                             const music = r.player.split(".")[0] === "sidra";
+                            const color = playerColor(r.player);
                             return (
                                 <div
                                     key={`${r.player}|${r.title}|${r.start}`}
-                                    className={cn(
-                                        "absolute flex items-center overflow-hidden rounded-[4px] border",
-                                        music
-                                            ? "border-warn/50 bg-warn/25"
-                                            : "border-ok/55 bg-ok/35",
-                                    )}
+                                    className="absolute flex items-center overflow-hidden rounded-[4px] border"
                                     style={{
                                         left: a,
                                         width: Math.max(b - a, 8),
                                         top: DOTS_ROW_H + lane * LANE_H + 4,
                                         height: BLOCK_H,
+                                        background: `color-mix(in srgb, ${color} 30%, transparent)`,
+                                        borderColor: `color-mix(in srgb, ${color} 55%, transparent)`,
                                     }}
                                     title={`${r.player} — ${r.title}`}
                                 >
                                     <span
-                                        className={cn(
-                                            "truncate px-1.5 text-[9px] whitespace-nowrap",
-                                            music ? "text-warn" : "text-ok",
-                                        )}
+                                        className="truncate px-1.5 text-[9px] whitespace-nowrap"
+                                        style={{ color }}
                                     >
                                         {music ? "♫ " : "▶ "}
                                         {r.title}
