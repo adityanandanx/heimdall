@@ -7,17 +7,19 @@ import { renderWithQuery } from "@/test/render";
 
 function renderDay(overrides: { day?: string } = {}) {
     const onDayChange = vi.fn();
+    const onOpenSearch = vi.fn();
     const onSeekDone = vi.fn();
     renderWithQuery(
         <DaySurface
             baseUrl={base}
             day={overrides.day ?? fixtureDay}
             onDayChange={onDayChange}
+            onOpenSearch={onOpenSearch}
             seek={null}
             onSeekDone={onSeekDone}
         />,
     );
-    return { onDayChange, onSeekDone };
+    return { onDayChange, onOpenSearch, onSeekDone };
 }
 
 describe("DaySurface", () => {
@@ -60,6 +62,53 @@ describe("DaySurface", () => {
         const input = await screen.findByPlaceholderText(/Search the day/);
         fireEvent.change(input, { target: { value: "omurice" } });
         expect(await screen.findByText("3")).toBeInTheDocument(); // frames 5,6,7
+    });
+
+    it("shows a suggestion dropdown of matching frames and sessions while typing", async () => {
+        renderDay();
+        const input = await screen.findByPlaceholderText(/Search the day/);
+        fireEvent.focus(input);
+        fireEvent.change(input, { target: { value: "omurice" } });
+        const listbox = await screen.findByTestId("day-suggest");
+        expect(listbox).toHaveTextContent("Omurice — Uncle Roger");
+        expect(listbox).toHaveTextContent("sidra");
+        fireEvent.change(input, { target: { value: "watch" } });
+        expect(await screen.findByTestId("day-suggest")).toHaveTextContent(/watch-lane\.tsx/); // frames
+    });
+
+    it("clicking a suggestion jumps the timeline and clears the query", async () => {
+        const { onOpenSearch } = renderDay();
+        const input = await screen.findByPlaceholderText(/Search the day/);
+        fireEvent.focus(input);
+        fireEvent.change(input, { target: { value: "omurice" } });
+        fireEvent.click(await screen.findByRole("option", { name: /Omurice — Uncle Roger/ }));
+        expect(screen.queryByTestId("day-suggest")).not.toBeInTheDocument();
+        expect(input).toHaveValue("");
+        expect(onOpenSearch).not.toHaveBeenCalled();
+    });
+
+    it("Enter with an arrow/tab-selected suggestion jumps the timeline, not the search tab", async () => {
+        const { onOpenSearch } = renderDay();
+        const input = await screen.findByPlaceholderText(/Search the day/);
+        fireEvent.focus(input);
+        fireEvent.change(input, { target: { value: "omurice" } });
+        await screen.findByTestId("day-suggest");
+        fireEvent.keyDown(input, { key: "ArrowDown" });
+        fireEvent.keyDown(input, { key: "Enter" });
+        expect(onOpenSearch).not.toHaveBeenCalled();
+        expect(screen.queryByTestId("day-suggest")).not.toBeInTheDocument();
+        expect(input).toHaveValue("");
+    });
+
+    it("plain Enter hands the query to the global search tab", async () => {
+        const { onOpenSearch } = renderDay();
+        const input = await screen.findByPlaceholderText(/Search the day/);
+        fireEvent.focus(input);
+        fireEvent.change(input, { target: { value: "omurice" } });
+        await screen.findByTestId("day-suggest");
+        fireEvent.keyDown(input, { key: "Enter" });
+        expect(onOpenSearch).toHaveBeenCalledWith("omurice");
+        expect(screen.queryByTestId("day-suggest")).not.toBeInTheDocument();
     });
 
     it("navigates days via the topbar", async () => {

@@ -6,7 +6,7 @@ import { renderWithQuery } from "@/test/render";
 
 function renderSearch() {
     const onPick = vi.fn();
-    renderWithQuery(<SearchSurface baseUrl={base} focusNonce={1} onPick={onPick} />);
+    renderWithQuery(<SearchSurface baseUrl={base} focusNonce={1} seed="" onPick={onPick} />);
     return { onPick };
 }
 

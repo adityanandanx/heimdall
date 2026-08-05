@@ -10,6 +10,7 @@ import { useDayFrames, useSearch } from "@/hooks/use-day-browser";
 interface SearchSurfaceProps {
     baseUrl: string;
     focusNonce: number;
+    seed: string;
     onPick: (item: SearchItem) => void;
 }
 
@@ -23,7 +24,7 @@ const FILTERS: Array<{ id: Filter; label: string }> = [
     { id: "week", label: "this week" },
 ];
 
-export function SearchSurface({ baseUrl, focusNonce, onPick }: SearchSurfaceProps) {
+export function SearchSurface({ baseUrl, focusNonce, seed, onPick }: SearchSurfaceProps) {
     const [q, setQ] = useState("");
     const [filter, setFilter] = useState<Filter>("all");
     const inputRef = useRef<HTMLInputElement>(null);
@@ -34,6 +35,11 @@ export function SearchSurface({ baseUrl, focusNonce, onPick }: SearchSurfaceProp
     useEffect(() => {
         if (focusNonce > 0) window.setTimeout(() => inputRef.current?.focus(), 0);
     }, [focusNonce]);
+
+    // Seed the query when the day surface hands off a search.
+    useEffect(() => {
+        if (seed) setQ(seed);
+    }, [seed]);
 
     const results = useMemo(() => {
         if (!data) return null;

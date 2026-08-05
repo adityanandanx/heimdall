@@ -14,16 +14,23 @@ interface DaySurfaceProps {
     baseUrl: string;
     day: string;
     onDayChange: (day: string) => void;
+    onOpenSearch: (q: string) => void;
     seek: { ts: number; nonce: number } | null;
     onSeekDone: () => void;
 }
 
-export function DaySurface({ baseUrl, day, onDayChange, seek, onSeekDone }: DaySurfaceProps) {
+type Suggestion =
+    | { kind: "frame"; frame: Frame; ts: number; title: string; sub: string }
+    | { kind: "session"; session: Session; ts: number; title: string; sub: string };
+
+export function DaySurface({ baseUrl, day, onDayChange, onOpenSearch, seek, onSeekDone }: DaySurfaceProps) {
     const [ppm, setPpm] = useState(14);
     const [selected, setSelected] = useState<Frame | null>(null);
     const [filterCls, setFilterCls] = useState<string | null>(null);
     const [dayQuery, setDayQuery] = useState("");
     const [mediaPopup, setMediaPopup] = useState<Session[] | null>(null);
+    const [suggestFocused, setSuggestFocused] = useState(false);
+    const [activeSugg, setActiveSugg] = useState(-1);
     const searchRef = useRef<HTMLInputElement>(null);
     const userSelectedRef = useRef(false);
 
@@ -60,6 +67,61 @@ export function DaySurface({ baseUrl, day, onDayChange, seek, onSeekDone }: DayS
         }
         return ids;
     }, [dayQuery, frames]);
+
+    const suggestions = useMemo(() => {
+        const q = dayQuery.trim().toLowerCase();
+        if (q.length < 2) return [];
+        const out: Suggestion[] = [];
+        for (const f of frames) {
+            if (out.length >= 5) break;
+            const hit = frameMatchText(f, q);
+            if (!hit) continue;
+            out.push({
+                kind: "frame",
+                frame: f,
+                ts: new Date(f.ts).getTime(),
+                title: f.window_title ?? f.window_class,
+                sub: hit,
+            });
+        }
+        for (const s of sessions) {
+            if (out.length >= 8) break;
+            const text = `${s.media_title ?? ""} ${s.transcript ?? ""}`.toLowerCase();
+            if (!text.includes(q)) continue;
+            out.push({
+                kind: "session",
+                session: s,
+                ts: new Date(s.ts_start).getTime(),
+                title: s.media_title ?? s.player,
+                sub: s.media_title
+                    ? `${s.player} · ${snippetOf(s.media_title, q)}`
+                    : `${s.player} · ${snippetOf(s.transcript ?? "", q)}`,
+            });
+        }
+        return out;
+    }, [dayQuery, frames, sessions]);
+
+    useEffect(() => setActiveSugg(-1), [dayQuery]);
+
+    const goToSuggestion = useCallback(
+        (s: Suggestion) => {
+            if (!frames.length) return;
+            userSelectedRef.current = true;
+            if (s.kind === "frame") setSelected(s.frame);
+            else setSelected(frameNear(frames, s.ts));
+            setDayQuery("");
+            searchRef.current?.blur();
+        },
+        [frames],
+    );
+
+    const submitDaySearch = useCallback(() => {
+        const q = dayQuery.trim();
+        if (q.length < 2) return;
+        setDayQuery("");
+        searchRef.current?.blur();
+        onOpenSearch(q);
+    }, [dayQuery, onOpenSearch]);
 
     const step = useCallback(
         (delta: number) => {
@@ -156,7 +218,15 @@ export function DaySurface({ baseUrl, day, onDayChange, seek, onSeekDone }: DayS
                         Today
                     </button>
                 </div>
-                <div className="relative ml-auto w-full max-w-[420px]">
+                <div
+                    className="relative ml-auto w-full max-w-[420px]"
+                    onBlur={(e) => {
+                        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
+                            setSuggestFocused(false);
+                            setActiveSugg(-1);
+                        }
+                    }}
+                >
                     <span className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-sm text-faint">
                         ⌕
                     </span>
@@ -164,6 +234,23 @@ export function DaySurface({ baseUrl, day, onDayChange, seek, onSeekDone }: DayS
                         ref={searchRef}
                         value={dayQuery}
                         onChange={(e) => setDayQuery(e.currentTarget.value)}
+                        onFocus={() => setSuggestFocused(true)}
+                        onKeyDown={(e) => {
+                            if (e.key === "ArrowDown" || e.key === "Tab") {
+                                if (!suggestions.length) return;
+                                e.preventDefault();
+                                setSuggestFocused(true);
+                                setActiveSugg((a) => (a + 1) % suggestions.length);
+                            } else if (e.key === "ArrowUp") {
+                                if (!suggestions.length) return;
+                                e.preventDefault();
+                                setActiveSugg((a) => (a - 1 + suggestions.length) % suggestions.length);
+                            } else if (e.key === "Enter") {
+                                const s = suggestions[activeSugg];
+                                if (activeSugg >= 0 && s) goToSuggestion(s);
+                                else submitDaySearch();
+                            }
+                        }}
                         placeholder="Search the day…  (⌘K for global)"
                         className="w-full rounded-md border border-line bg-surface-2 py-2 pl-9 pr-3 text-sm outline-none transition-shadow placeholder:text-faint focus:border-primary focus:shadow-[0_0_0_3px_rgba(97,175,239,0.18)]"
                     />
@@ -171,6 +258,52 @@ export function DaySurface({ baseUrl, day, onDayChange, seek, onSeekDone }: DayS
                         <span className="absolute top-1/2 right-3 -translate-y-1/2 rounded-full border border-ok/40 px-1.5 py-px text-[10px] text-ok">
                             {hits.size}
                         </span>
+                    )}
+                    {suggestFocused && suggestions.length > 0 && (
+                        <div
+                            className="absolute top-full right-0 left-0 z-40 mt-1 overflow-hidden rounded-md border border-line bg-surface p-1 shadow-[var(--e2)]"
+                            role="listbox"
+                            aria-label="day search suggestions"
+                            data-testid="day-suggest"
+                        >
+                            {suggestions.map((s, i) => (
+                                <button
+                                    key={`${s.kind}-${i}`}
+                                    type="button"
+                                    role="option"
+                                    aria-selected={i === activeSugg}
+                                    onMouseEnter={() => setActiveSugg(i)}
+                                    onClick={() => goToSuggestion(s)}
+                                    className={cn(
+                                        "flex w-full items-center gap-2.5 rounded-sm px-2 py-1.5 text-left transition-colors",
+                                        i === activeSugg ? "bg-primary/10" : "hover:bg-surface-2",
+                                    )}
+                                >
+                                    {s.kind === "frame" ? (
+                                        <img
+                                            src={frameImageUrl(baseUrl, s.frame.id)}
+                                            alt=""
+                                            className="h-8 w-12 shrink-0 rounded-[3px] border border-line bg-surface-2 object-cover"
+                                        />
+                                    ) : (
+                                        <span className="flex size-8 shrink-0 items-center justify-center rounded-[3px] border border-line bg-surface-2">
+                                            <span className="font-mono text-[11px] text-dim">▶</span>
+                                        </span>
+                                    )}
+                                    <span className="min-w-0 flex-1">
+                                        <span className="flex items-center gap-1.5 text-xs">
+                                            <b className="min-w-0 truncate font-semibold text-foreground">
+                                                {s.title}
+                                            </b>
+                                            <span className="ml-auto shrink-0 font-mono text-[10px] text-faint">
+                                                {formatTimeS(s.ts)}
+                                            </span>
+                                        </span>
+                                        <span className="block truncate text-[10px] text-faint">{s.sub}</span>
+                                    </span>
+                                </button>
+                            ))}
+                        </div>
                     )}
                 </div>
                 <div className="flex items-center gap-2">
@@ -281,4 +414,20 @@ function formatDay(day: string): string {
         month: "short",
         day: "numeric",
     });
+}
+
+function frameMatchText(f: Frame, q: string): string | null {
+    for (const field of [f.window_title, f.a11y_text, f.ocr_text]) {
+        if (field && field.toLowerCase().includes(q)) return snippetOf(field, q);
+    }
+    if (f.window_class.toLowerCase().includes(q)) return f.window_class;
+    return null;
+}
+
+function snippetOf(text: string, q: string, radius = 42): string {
+    const idx = text.toLowerCase().indexOf(q.toLowerCase());
+    if (idx === -1) return text.slice(0, radius * 2);
+    const from = Math.max(0, idx - radius);
+    const to = Math.min(text.length, idx + q.length + radius);
+    return `${from > 0 ? "…" : ""}${text.slice(from, to)}${to < text.length ? "…" : ""}`;
 }

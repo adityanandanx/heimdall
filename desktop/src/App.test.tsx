@@ -40,4 +40,17 @@ describe("App", () => {
         expect(await screen.findByText("DAY")).toBeInTheDocument();
         expect((await screen.findAllByText(/10:00:00/)).length).toBeGreaterThan(0); // session start
     });
+
+    it("hands the day search query to the search surface on plain Enter", async () => {
+        renderWithQuery(<App />);
+        const input = await screen.findByPlaceholderText(/Search the day/);
+        fireEvent.focus(input);
+        fireEvent.change(input, { target: { value: "omurice" } });
+        await screen.findByTestId("day-suggest");
+        fireEvent.keyDown(input, { key: "Enter" });
+
+        expect(await screen.findByPlaceholderText(/e\.g\./)).toBeInTheDocument(); // search surface
+        expect(screen.getByLabelText("search query")).toHaveValue("omurice");
+        expect(await screen.findByText(/uncle roger review the most difficult/)).toBeInTheDocument();
+    });
 });

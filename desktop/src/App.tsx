@@ -19,6 +19,7 @@ function App() {
     const [day, setDay] = useState<string | null>(null);
     const [seek, setSeek] = useState<{ ts: number; nonce: number } | null>(null);
     const [focusNonce, setFocusNonce] = useState(0);
+    const [searchSeed, setSearchSeed] = useState("");
     const [refreshSeconds, setRefreshSeconds] = useState(() => {
         const v = Number(window.localStorage.getItem(LS_REFRESH));
         return Number.isFinite(v) && v > 0 ? v : 10;
@@ -46,7 +47,16 @@ function App() {
 
     const navigate = useCallback((id: SurfaceId) => {
         setSurface(id);
-        if (id === "search") setFocusNonce((n) => n + 1);
+        if (id === "search") {
+            setSearchSeed("");
+            setFocusNonce((n) => n + 1);
+        }
+    }, []);
+
+    const openGlobalSearch = useCallback((q: string) => {
+        setSearchSeed(q);
+        setFocusNonce((n) => n + 1);
+        setSurface("search");
     }, []);
 
     const jumpTo = useCallback((ts: number) => {
@@ -66,6 +76,7 @@ function App() {
                         baseUrl={serverUrl}
                         day={day ?? dayStrOf(new Date())}
                         onDayChange={setDay}
+                        onOpenSearch={openGlobalSearch}
                         seek={seek}
                         onSeekDone={() => setSeek(null)}
                     />
@@ -75,6 +86,7 @@ function App() {
                     <SearchSurface
                         baseUrl={serverUrl}
                         focusNonce={focusNonce}
+                        seed={searchSeed}
                         onPick={(item: SearchItem) => jumpTo(new Date(item.ts).getTime())}
                     />
                 );
@@ -97,7 +109,7 @@ function App() {
                     />
                 );
         }
-    }, [serverUrl, surface, day, seek, focusNonce, refreshSeconds, setServerUrl, setRefresh, jumpTo]);
+    }, [serverUrl, surface, day, seek, focusNonce, searchSeed, refreshSeconds, setServerUrl, setRefresh, jumpTo, openGlobalSearch]);
 
     return (
         <Shell surface={surface} onSurface={navigate} onGlobalSearch={() => navigate("search")} online={online}>
