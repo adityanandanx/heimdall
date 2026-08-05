@@ -153,6 +153,35 @@ def search(
     return {"total": total, "items": items}
 
 
+@search_router.get("/search/facets")
+def search_facets(
+    state: Any = Depends(_state),
+    q: str | None = Query(None, max_length=500),
+    kind: Literal["frame", "session"] | None = Query(None),
+    window_class: str | None = None,
+    player: str | None = None,
+    start: str | None = None,
+    end: str | None = None,
+) -> dict:
+    """Top apps and media players in the current search scope, with counts —
+    powers filter dropdowns (#57).
+
+    Each dimension is computed excluding its own filter: `window_class` does
+    not narrow the apps facet and `player` does not narrow the players facet,
+    so the dropdowns always show the full option set. `q` is optional
+    (browse). Invalid FTS5 syntax is a 422.
+    """
+    q = q.strip() if q else None
+    start_ms = _parse_time(start, "start")
+    end_ms = _parse_time(end, "end")
+    try:
+        return state.db.facet_counts(
+            q, kind=kind, window_class=window_class, player=player,
+            start=start_ms, end=end_ms)
+    except sqlite3.OperationalError as exc:
+        raise HTTPException(status_code=422, detail=f"invalid search query: {exc}")
+
+
 def _merge_search(state: Any, q: str | None, window_class: str | None,
                   player: str | None, workspace: int | None,
                   monitor: int | None, fullscreen: bool | None,

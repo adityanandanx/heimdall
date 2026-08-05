@@ -341,6 +341,91 @@ def test_search_browse_sort_score_is_newest_first(api_client: TestClient):
     assert ids == sorted(ids, reverse=True)
 
 
+def test_search_facets_shape_and_ranking(api_client: TestClient):
+    """Browse mode: apps ranked by count desc, ties alphabetical."""
+    body = api_client.get("/search/facets").json()
+    assert set(body) == {"apps", "players"}
+    assert set(body["apps"][0]) == {"value", "count"}
+    counts = [a["count"] for a in body["apps"]]
+    assert counts == sorted(counts, reverse=True)
+    assert [a["value"] for a in body["apps"]] == ["firefox", "code", "kitty", "mpv"]
+    assert body["players"] == []
+
+
+def test_search_facets_players_ranked(api_client: TestClient, db):
+    start_ms, _ = day_bounds(FIXTURE_DAY)
+    _insert_session(db, player="vlc", wall_ms=start_ms + 10 * 60_000)
+    _insert_session(db, player="vlc", wall_ms=start_ms + 20 * 60_000)
+    _insert_session(db, player="mpv", wall_ms=start_ms + 30 * 60_000)
+    body = api_client.get("/search/facets").json()
+    assert body["players"] == [{"value": "vlc", "count": 2},
+                               {"value": "mpv", "count": 1}]
+    assert [a["value"] for a in body["apps"]] == ["firefox", "code", "kitty", "mpv"]
+
+
+def test_search_facets_with_query(api_client: TestClient, db):
+    """Counts reflect the q scope, on each surface."""
+    start_ms, _ = day_bounds(FIXTURE_DAY)
+    _insert_session(db, title="Inception (2010)", wall_ms=start_ms + 10 * 60_000)
+    frame_hit = api_client.get("/search/facets", params={"q": "checkpointers"}).json()
+    assert frame_hit["apps"] == [{"value": "firefox", "count": 1}]
+    assert frame_hit["players"] == []
+    sess_hit = api_client.get("/search/facets", params={"q": "inception"}).json()
+    assert sess_hit["apps"] == [{"value": "mpv", "count": 1}]  # title match too
+    assert sess_hit["players"] == [{"value": "vlc", "count": 1}]
+
+
+def test_search_facets_kind_scopes_surfaces(api_client: TestClient, db):
+    start_ms, _ = day_bounds(FIXTURE_DAY)
+    _insert_session(db, wall_ms=start_ms + 10 * 60_000)
+    frames_only = api_client.get("/search/facets", params={"kind": "frame"}).json()
+    assert frames_only["apps"]
+    assert frames_only["players"] == []
+    sessions_only = api_client.get("/search/facets", params={"kind": "session"}).json()
+    assert sessions_only["apps"] == []
+    assert sessions_only["players"] == [{"value": "vlc", "count": 1}]
+
+
+def test_search_facets_excludes_own_filter(api_client: TestClient, db):
+    """Classic faceting: a selected app/player never narrows its own facet."""
+    start_ms, _ = day_bounds(FIXTURE_DAY)
+    _insert_session(db, player="vlc", wall_ms=start_ms + 10 * 60_000)
+    _insert_session(db, player="mpv", wall_ms=start_ms + 20 * 60_000)
+    with_app = api_client.get("/search/facets", params={"window_class": "code"}).json()
+    assert [a["value"] for a in with_app["apps"]] == ["firefox", "code", "kitty", "mpv"]
+    assert with_app["players"] == [{"value": "mpv", "count": 1},
+                                   {"value": "vlc", "count": 1}]
+    with_player = api_client.get("/search/facets", params={"player": "mpv"}).json()
+    assert with_player["players"] == [{"value": "mpv", "count": 1},
+                                      {"value": "vlc", "count": 1}]
+    assert [a["value"] for a in with_player["apps"]] == ["firefox", "code", "kitty", "mpv"]
+
+
+def test_search_facets_time_range(api_client: TestClient):
+    start_ms, _ = day_bounds(FIXTURE_DAY)
+    body = api_client.get("/search/facets", params={
+        "start": ts_to_iso(start_ms + 30 * 60_000),
+    }).json()
+    assert [a["value"] for a in body["apps"]] == ["firefox", "code", "kitty", "mpv"]
+    assert [a["count"] for a in body["apps"]] == [2, 1, 1, 1]  # @35/@80, @65, @90, @50
+
+
+def test_search_facets_empty_scope_and_invalid_q(api_client: TestClient):
+    empty = api_client.get("/search/facets", params={"q": "zzzznothing"}).json()
+    assert empty == {"apps": [], "players": []}
+    assert api_client.get("/search/facets", params={"q": "("}).status_code == 422
+
+
+def test_search_facets_top_25(api_client: TestClient, db):
+    start_ms, _ = day_bounds(FIXTURE_DAY)
+    for i in range(30):
+        _insert_session(db, player=f"p{i:02d}", wall_ms=start_ms + (i + 1) * 60_000)
+    body = api_client.get("/search/facets").json()
+    assert len(body["players"]) == 25
+    assert body["players"][0]["count"] == 1
+    assert body["players"][0]["value"] == "p00"  # ties alphabetical
+
+
 def test_search_sort_invalid(api_client: TestClient):
     assert api_client.get("/search", params={"q": "youtube", "sort": "bogus"}).status_code == 422
     assert api_client.get("/search", params={"q": "youtube", "monitor": -1}).status_code == 422
