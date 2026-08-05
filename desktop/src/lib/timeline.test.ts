@@ -16,6 +16,7 @@ import {
     localISO,
     OFF_MIN_MS,
     playerColor,
+    scrollToPlayhead,
     sessionWatchedSec,
     shiftDay,
     tsOf,
@@ -297,6 +298,24 @@ describe("assignLanes", () => {
             }
         }
         expect(new Set(lanes.map((l) => l.lane)).size).toBe(3);
+    });
+});
+
+describe("scrollToPlayhead", () => {
+    it("keeps the position while the playhead is inside the viewport", () => {
+        expect(scrollToPlayhead(400, 800, 10000, 100)).toBe(100);
+    });
+
+    it("centers the playhead when it exits past the right edge", () => {
+        expect(scrollToPlayhead(920, 800, 10000, 100)).toBe(520); // 920 - 800/2
+    });
+
+    it("centers the playhead when it exits past the left edge", () => {
+        expect(scrollToPlayhead(40, 800, 10000, 700)).toBe(0); // 40 - 400, clamped
+    });
+
+    it("clamps to the timeline scroll limit at the end", () => {
+        expect(scrollToPlayhead(15000, 800, 10000, 9200)).toBe(10000);
     });
 });
 

@@ -245,6 +245,24 @@ export function localISO(d: Date): string {
     )}:${p2(d.getSeconds())}${sign}${p2(Math.floor(abs / 60))}:${p2(abs % 60)}`;
 }
 
+/**
+ * Scroll position that brings the playhead into view: centers it when it
+ * leaves the viewport (with a small edge margin), otherwise keeps the
+ * current position. Clamped to the timeline's scroll limits.
+ */
+export function scrollToPlayhead(
+    playheadX: number,
+    viewW: number,
+    limit: number,
+    scrollLeft: number,
+    margin = 8,
+): number {
+    if (playheadX < scrollLeft + margin || playheadX > scrollLeft + viewW - margin) {
+        return Math.max(0, Math.min(playheadX - viewW / 2, limit));
+    }
+    return scrollLeft;
+}
+
 /** Day start/end for a YYYY-MM-DD string as local-midnight ISO strings. */
 export function dayBoundsISO(day: string): { start: string; end: string } {
     const [y, m, d] = day.split("-").map(Number);

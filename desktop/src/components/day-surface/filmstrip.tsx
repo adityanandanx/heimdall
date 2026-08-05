@@ -13,6 +13,7 @@ import {
     clsColor,
     frameNear,
     playerColor,
+    scrollToPlayhead,
     tsOf,
     type Run,
     type Span,
@@ -75,15 +76,6 @@ export function Filmstrip({ baseUrl, frames, sessions, selected, onSelect, onMed
         return () => ro.disconnect();
     }, []);
 
-    // When following live, ride the newest capture by snapping to the end
-    // of the timeline whenever new frames come in.
-    useLayoutEffect(() => {
-        if (!followLive) return;
-        const el = scrollRef.current;
-        if (el) el.scrollLeft = scrollLimit();
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [frames, followLive]);
-
     const runs = useMemo(() => buildRuns(sessions), [sessions]);
     const laneRuns = useMemo(() => assignLanes(runs), [runs]);
     const lanes = useMemo(
@@ -115,6 +107,27 @@ export function Filmstrip({ baseUrl, frames, sessions, selected, onSelect, onMed
         const el = scrollRef.current;
         return el ? Math.max(0, contentW + padEnd - el.clientWidth) : 0;
     };
+
+    // When following live, ride the newest capture by snapping to the end
+    // of the timeline whenever new frames come in.
+    useLayoutEffect(() => {
+        if (!followLive) return;
+        const el = scrollRef.current;
+        if (el) el.scrollLeft = scrollLimit();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [frames, followLive]);
+
+    // Keep the playhead visible whenever the selection moves — arrow-key
+    // scrubbing, search-jump suggestions, jump-to-moment. Skipped while
+    // dragging (the pointer already defines the position) and while
+    // following live (which rides the newest frame instead).
+    useLayoutEffect(() => {
+        if (followLive || draggingRef.current) return;
+        const el = scrollRef.current;
+        if (!el || !axis.length || !selected) return;
+        const x = axisOf(axis, selected.ts);
+        el.scrollLeft = scrollToPlayhead(x, el.clientWidth, scrollLimit(), el.scrollLeft);
+    }, [selected?.id, axis, contentW, padEnd, followLive]);
 
     // Zoom-anchor: keep the span under the cursor stable across ppm changes.
     useLayoutEffect(() => {
