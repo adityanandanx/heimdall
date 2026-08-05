@@ -26,17 +26,12 @@ def test_health(api_client: TestClient):
     assert body["uptime_s"] >= 0
 
 
-# ---- / (day browser UI) ----
+# ---- / (API only — no HTML UI) ----
 
-def test_root_serves_day_browser(api_client: TestClient):
+def test_root_is_api_only(api_client: TestClient):
+    """The backend serves API only; the desktop client is the UI. GET / is gone."""
     r = api_client.get("/")
-    assert r.status_code == 200
-    assert r.headers["content-type"].startswith("text/html")
-    assert "heimdall · day browser" in r.text
-    assert "loadDay" in r.text
-    # same-origin API: no hardcoded host, no embedded snapshot
-    assert "127.0.0.1" not in r.text
-    assert "embedded data snapshot" not in r.text
+    assert r.status_code == 404
 
 
 # ---- /search ----

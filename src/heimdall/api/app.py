@@ -15,11 +15,9 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from heimdall import __version__
-from heimdall.api.prototype import prototype_router
 from heimdall.api.routers import (capture_router, health_router, search_router,
                                   frames_router, pipes_router, status_router,
                                   sessions_router)
-from heimdall.api.ui import ui_router
 from heimdall.capture.asr import AsrManager
 from heimdall.config import Config
 from heimdall.db import Database, init_db
@@ -59,14 +57,12 @@ def create_app(config: Config, *, db_path: str | Path | None = None,
     app.state.asr = AsrManager(config, app.state.db)
 
     app.include_router(health_router)
-    app.include_router(ui_router)
     app.include_router(search_router)
     app.include_router(frames_router)
     app.include_router(pipes_router)
     app.include_router(status_router)
     app.include_router(sessions_router)
     app.include_router(capture_router)
-    app.include_router(prototype_router)
 
     if start_scheduler:
         start_scheduler_fn(app)
