@@ -161,10 +161,15 @@ export async function fetchRecentSessions(base: string, days = 7): Promise<Sessi
     );
 }
 
-export function fetchSearch(base: string, q: string, signal?: AbortSignal): Promise<SearchItem[]> {
-    const params = new URLSearchParams({ q, limit: "100" });
+export function fetchSearch(
+    base: string,
+    params: URLSearchParams,
+    signal?: AbortSignal,
+): Promise<SearchItem[]> {
+    const full = new URLSearchParams(params);
+    if (!full.has("limit")) full.set("limit", "100");
     return fetchJson<{ total: number; items: SearchItem[] }>(
-        apiUrl(base, "/search") + `?${params}`,
+        apiUrl(base, "/search") + `?${full}`,
         signal,
     ).then((body) => body.items);
 }

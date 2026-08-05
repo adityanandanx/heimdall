@@ -158,6 +158,15 @@ export const searchFixtures = [
     },
 ];
 
+// Which text source each search fixture won by, for the source= filter.
+const searchSources: Record<number, "a11y" | "ocr" | "session"> = {
+    2: "a11y",
+    21: "session",
+};
+
+/** Every /search request the UI made this session (URL strings), for tests. */
+export const searchRequestUrls: string[] = [];
+
 export const pipesPayload = {
     "day-recap": {
         pipe: "day-recap",
@@ -217,10 +226,23 @@ export const handlers = [
     }),
     http.get(`${base}/search`, ({ request }) => {
         const url = new URL(request.url);
+        searchRequestUrls.push(request.url);
         const q = url.searchParams.get("q")?.toLowerCase() ?? "";
-        const items = searchFixtures.filter((s) =>
+        const kind = url.searchParams.get("kind");
+        const source = url.searchParams.get("source");
+        const start = url.searchParams.get("start");
+        const end = url.searchParams.get("end");
+        let items = searchFixtures.filter((s) =>
             (s.snippet + s.window_class + (s.window_title ?? "")).toLowerCase().includes(q),
         );
+        if (kind === "frame") items = items.filter((s) => s.kind === "frame");
+        if (kind === "session") items = items.filter((s) => s.kind === "session");
+        if (source === "a11y") items = items.filter((s) => searchSources[s.id] === "a11y");
+        if (source === "ocr") items = items.filter((s) => searchSources[s.id] === "ocr");
+        if (source === "transcript") items = items.filter((s) => searchSources[s.id] === "session");
+        if (start) items = items.filter((s) => s.ts >= start);
+        if (end) items = items.filter((s) => s.ts < end);
+        items = [...items].sort((a, b) => (a.ts < b.ts ? 1 : a.ts > b.ts ? -1 : 0));
         return HttpResponse.json({ total: items.length, items });
     }),
     http.post(`${base}/pipes/run/:name`, ({ params }) => {

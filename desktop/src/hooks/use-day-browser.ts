@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
     fetchDayFrames,
     fetchDaySessions,
@@ -8,6 +8,10 @@ import {
     runPipe,
     type PipeRunResult,
 } from "@/lib/api";
+import {
+    compileSearchParams,
+    type SearchFilters,
+} from "@/lib/search-filters";
 
 export function useDayFrames(baseUrl: string, day: string) {
     return useQuery({
@@ -46,12 +50,24 @@ export function useDebouncedValue<T>(value: T, delayMs: number): T {
     return debounced;
 }
 
-export function useSearch(baseUrl: string, query: string) {
-    const debounced = useDebouncedValue(query.trim(), 180);
+export function useSearch(baseUrl: string, query: string, filters: SearchFilters) {
+    const params = useMemo(() => compileSearchParams(filters, query), [filters, query]);
+    const debounced = useDebouncedValue(params, 250);
+    const enabled = useMemo(() => {
+        if (!baseUrl) return false;
+        const q = debounced.get("q") ?? "";
+        const filterActive =
+            debounced.has("kind") ||
+            debounced.has("source") ||
+            debounced.has("start") ||
+            debounced.has("end");
+        // Browse mode: text or any filter fetches; bare idle state does not.
+        return q.length >= 2 || filterActive;
+    }, [baseUrl, debounced]);
     return useQuery({
-        queryKey: ["search", baseUrl, debounced],
+        queryKey: ["search", baseUrl, debounced.toString()],
         queryFn: ({ signal }) => fetchSearch(baseUrl, debounced, signal),
-        enabled: !!baseUrl && debounced.length >= 2,
+        enabled,
         staleTime: 30_000,
         refetchOnWindowFocus: false,
     });

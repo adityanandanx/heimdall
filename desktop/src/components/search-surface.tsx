@@ -4,6 +4,17 @@ import { frameImageUrl } from "@/lib/api";
 import { relTime } from "@/lib/format";
 import { srcOf } from "@/lib/frames";
 import { dayStrOf } from "@/lib/timeline";
+import {
+    activeChips,
+    DEFAULT_FILTERS,
+    KINDS,
+    PRESETS,
+    SOURCES,
+    withChipRemoved,
+    wouldFetch,
+    type ChipId,
+    type SearchFilters,
+} from "@/lib/search-filters";
 import { cn } from "@/lib/utils";
 import { useDayFrames, useSearch } from "@/hooks/use-day-browser";
 
@@ -14,22 +25,12 @@ interface SearchSurfaceProps {
     onPick: (item: SearchItem) => void;
 }
 
-type Filter = "all" | "frames" | "sessions" | "today" | "week";
-
-const FILTERS: Array<{ id: Filter; label: string }> = [
-    { id: "all", label: "all" },
-    { id: "frames", label: "frames" },
-    { id: "sessions", label: "sessions" },
-    { id: "today", label: "today" },
-    { id: "week", label: "this week" },
-];
-
 export function SearchSurface({ baseUrl, focusNonce, seed, onPick }: SearchSurfaceProps) {
     const [q, setQ] = useState("");
-    const [filter, setFilter] = useState<Filter>("all");
+    const [filters, setFilters] = useState<SearchFilters>(DEFAULT_FILTERS);
     const inputRef = useRef<HTMLInputElement>(null);
 
-    const { data, isFetching } = useSearch(baseUrl, q);
+    const { data, isFetching } = useSearch(baseUrl, q, filters);
 
     // Autofocus when the surface opens (or is summoned with ⌘K).
     useEffect(() => {
@@ -41,21 +42,15 @@ export function SearchSurface({ baseUrl, focusNonce, seed, onPick }: SearchSurfa
         if (seed) setQ(seed);
     }, [seed]);
 
-    const results = useMemo(() => {
-        if (!data) return null;
-        let items = data;
-        if (filter === "frames") items = items.filter((i) => i.kind === "frame");
-        if (filter === "sessions") items = items.filter((i) => i.kind === "session");
-        if (filter === "today" || filter === "week") {
-            const cutoff = new Date();
-            if (filter === "today") cutoff.setHours(0, 0, 0, 0);
-            else cutoff.setDate(cutoff.getDate() - 6);
-            items = items.filter((i) => new Date(i.ts).getTime() >= cutoff.getTime());
-        }
-        return items;
-    }, [data, filter]);
+    const patch = (partial: Partial<SearchFilters>) =>
+        setFilters((prev) => ({ ...prev, ...partial }));
+
+    const removeChip = (id: ChipId) =>
+        setFilters((prev) => withChipRemoved(prev, id));
 
     const query = q.trim();
+    const chips = useMemo(() => activeChips(filters), [filters]);
+    const showResults = wouldFetch(filters, q);
 
     return (
         <div className="flex h-full flex-col gap-4 overflow-y-auto p-7">
@@ -83,30 +78,92 @@ export function SearchSurface({ baseUrl, focusNonce, seed, onPick }: SearchSurfa
                 </span>
             </div>
 
-            <div className="flex flex-wrap gap-2">
-                {FILTERS.map((f) => (
-                    <button
-                        key={f.id}
-                        type="button"
-                        onClick={() => setFilter(f.id)}
-                        className={cn(
-                            "rounded-full border px-2.5 py-1 text-[11px] transition-colors",
-                            filter === f.id
-                                ? "border-primary/40 text-primary"
-                                : "border-line text-dim hover:text-foreground",
-                        )}
-                    >
-                        {f.label}
-                    </button>
-                ))}
+            {/* Always-visible filter bar (#58) */}
+            <div className="flex flex-wrap items-center gap-2">
+                <div
+                    role="group"
+                    aria-label="kind filter"
+                    className="flex overflow-hidden rounded-full border border-line"
+                >
+                    {KINDS.map((k) => (
+                        <button
+                            key={k.id}
+                            type="button"
+                            onClick={() => patch({ kind: k.id })}
+                            className={cn(
+                                "px-2.5 py-1 text-[11px] transition-colors",
+                                filters.kind === k.id
+                                    ? "bg-primary/15 text-primary"
+                                    : "text-dim hover:text-foreground",
+                            )}
+                        >
+                            {k.label}
+                        </button>
+                    ))}
+                </div>
+                <select
+                    aria-label="date range preset"
+                    value={filters.preset}
+                    onChange={(e) => patch({ preset: e.currentTarget.value as SearchFilters["preset"] })}
+                    className="rounded-md border border-line bg-surface px-2 py-1 text-[11px] text-dim outline-none focus:border-primary [color-scheme:dark]"
+                >
+                    {PRESETS.map((p) => (
+                        <option key={p.id} value={p.id}>
+                            {p.label}
+                        </option>
+                    ))}
+                </select>
+                <input
+                    type="datetime-local"
+                    aria-label="start time"
+                    value={filters.start}
+                    onChange={(e) => patch({ start: e.currentTarget.value })}
+                    className="rounded-md border border-line bg-surface px-2 py-1 text-[11px] text-dim outline-none focus:border-primary [color-scheme:dark]"
+                />
+                <input
+                    type="datetime-local"
+                    aria-label="end time"
+                    value={filters.end}
+                    onChange={(e) => patch({ end: e.currentTarget.value })}
+                    className="rounded-md border border-line bg-surface px-2 py-1 text-[11px] text-dim outline-none focus:border-primary [color-scheme:dark]"
+                />
+                <select
+                    aria-label="source type"
+                    value={filters.source}
+                    onChange={(e) => patch({ source: e.currentTarget.value as SearchFilters["source"] })}
+                    className="rounded-md border border-line bg-surface px-2 py-1 text-[11px] text-dim outline-none focus:border-primary [color-scheme:dark]"
+                >
+                    {SOURCES.map((s) => (
+                        <option key={s.id} value={s.id}>
+                            {s.label}
+                        </option>
+                    ))}
+                </select>
             </div>
 
-            {query.length >= 2 && (
+            {chips.length > 0 && (
+                <div className="flex flex-wrap items-center gap-1.5" aria-label="active filters">
+                    {chips.map((chip) => (
+                        <button
+                            key={chip.id}
+                            type="button"
+                            onClick={() => removeChip(chip.id)}
+                            aria-label={`remove ${chip.label} filter`}
+                            className="flex items-center gap-1 rounded-full border border-primary/30 bg-primary/10 px-2 py-0.5 text-[10px] text-primary transition-colors hover:bg-primary/20"
+                        >
+                            {chip.label}
+                            <span aria-hidden>×</span>
+                        </button>
+                    ))}
+                </div>
+            )}
+
+            {showResults && (
                 <div className="grid grid-cols-[repeat(auto-fill,minmax(240px,1fr))] items-start gap-3">
-                    {(results ?? []).map((item) => (
+                    {(data ?? []).map((item) => (
                         <ResultCard key={`${item.kind}-${item.id}`} item={item} query={query} baseUrl={baseUrl} onPick={onPick} />
                     ))}
-                    {results && results.length === 0 && (
+                    {data && data.length === 0 && (
                         <p className="col-span-full text-xs text-dim">No matches.</p>
                     )}
                 </div>
