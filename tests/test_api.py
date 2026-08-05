@@ -344,12 +344,61 @@ def test_search_browse_sort_score_is_newest_first(api_client: TestClient):
 def test_search_facets_shape_and_ranking(api_client: TestClient):
     """Browse mode: apps ranked by count desc, ties alphabetical."""
     body = api_client.get("/search/facets").json()
-    assert set(body) == {"apps", "players"}
+    assert set(body) == {"apps", "players", "workspaces", "monitors"}
     assert set(body["apps"][0]) == {"value", "count"}
     counts = [a["count"] for a in body["apps"]]
     assert counts == sorted(counts, reverse=True)
     assert [a["value"] for a in body["apps"]] == ["firefox", "code", "kitty", "mpv"]
     assert body["players"] == []
+
+
+def test_search_facets_workspaces_monitors(api_client: TestClient):
+    """Frame attributes surface as their own counted facets (#63)."""
+    body = api_client.get("/search/facets").json()
+    # All fixture frames are workspace 2 / monitor 0.
+    assert body["workspaces"] == [{"value": 2, "count": 8}]
+    assert body["monitors"] == [{"value": 0, "count": 8}]
+    frames_only = api_client.get("/search/facets", params={"kind": "frame"}).json()
+    assert frames_only["workspaces"] == body["workspaces"]
+    assert frames_only["monitors"] == body["monitors"]
+    sessions_only = api_client.get("/search/facets", params={"kind": "session"}).json()
+    assert sessions_only["workspaces"] == []
+    assert sessions_only["monitors"] == []
+
+
+def test_search_facets_frame_attribute_cross_narrowing(api_client: TestClient, db):
+    """A workspace/monitor selection narrows the other frame dimensions but
+    never its own facet (classic faceting, #63)."""
+    start_ms, _ = day_bounds(FIXTURE_DAY)
+    db.insert_frame({
+        "ts": start_ms + 99 * 60_000,
+        "monitor": 1,
+        "workspace": 1,
+        "window_class": "obsidian",
+        "window_title": "notes",
+        "fullscreen": 0,
+        "trigger": "activewindow",
+        "image_path": "frames/2026-08-05/99.jpg",
+        "image_bytes": 10,
+        "ocr_text": "second workspace notes",
+        "ocr_sec": 4.0,
+        "a11y_text": None,
+        "a11y_json": None,
+        "ocr_engine": None,
+    })
+    body = api_client.get("/search/facets").json()
+    assert body["workspaces"] == [{"value": 2, "count": 8}, {"value": 1, "count": 1}]
+    assert body["monitors"] == [{"value": 0, "count": 8}, {"value": 1, "count": 1}]
+    # workspace selection: apps + monitors narrow, workspaces do not.
+    with_ws = api_client.get("/search/facets", params={"workspace": 2}).json()
+    assert with_ws["workspaces"] == body["workspaces"]
+    assert "obsidian" not in [a["value"] for a in with_ws["apps"]]
+    assert with_ws["monitors"] == [{"value": 0, "count": 8}]
+    # monitor selection: workspaces narrow, monitors do not.
+    with_mon = api_client.get("/search/facets", params={"monitor": 1}).json()
+    assert with_mon["monitors"] == body["monitors"]
+    assert with_mon["workspaces"] == [{"value": 1, "count": 1}]
+    assert "obsidian" in [a["value"] for a in with_mon["apps"]]
 
 
 def test_search_facets_players_ranked(api_client: TestClient, db):
@@ -427,7 +476,7 @@ def test_search_facets_time_range(api_client: TestClient):
 
 def test_search_facets_empty_scope_and_invalid_q(api_client: TestClient):
     empty = api_client.get("/search/facets", params={"q": "zzzznothing"}).json()
-    assert empty == {"apps": [], "players": []}
+    assert empty == {"apps": [], "players": [], "workspaces": [], "monitors": []}
     assert api_client.get("/search/facets", params={"q": "("}).status_code == 422
 
 

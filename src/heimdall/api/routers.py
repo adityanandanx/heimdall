@@ -160,16 +160,20 @@ def search_facets(
     kind: Literal["frame", "session"] | None = Query(None),
     window_class: str | None = None,
     player: str | None = None,
+    workspace: int | None = Query(None, ge=0),
+    monitor: int | None = Query(None, ge=0),
     start: str | None = None,
     end: str | None = None,
 ) -> dict:
-    """Top apps and media players in the current search scope, with counts —
-    powers filter dropdowns (#57).
+    """Top apps, media players, workspaces and monitors in the current search
+    scope, with counts — powers filter dropdowns (#57, #63).
 
     Each dimension is computed excluding its own filter: `window_class` does
-    not narrow the apps facet and `player` does not narrow the players facet,
-    so the dropdowns always show the full option set. `q` is optional
-    (browse). Invalid FTS5 syntax is a 422.
+    not narrow the apps facet, `player` does not narrow the players facet, and
+    `workspace`/`monitor` never narrow their own facets — so the dropdowns
+    always show the full option set. Workspace/monitor selections do narrow
+    the *other* frame dimensions. `q` is optional (browse). Invalid FTS5
+    syntax is a 422.
     """
     q = q.strip() if q else None
     start_ms = _parse_time(start, "start")
@@ -177,6 +181,7 @@ def search_facets(
     try:
         return state.db.facet_counts(
             q, kind=kind, window_class=window_class, player=player,
+            workspace=workspace, monitor=monitor,
             start=start_ms, end=end_ms)
     except sqlite3.OperationalError as exc:
         raise HTTPException(status_code=422, detail=f"invalid search query: {exc}")
