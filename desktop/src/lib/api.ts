@@ -1,4 +1,4 @@
-import { dayBoundsISO } from "@/lib/timeline";
+import { dayBoundsISO, dayStrOf } from "@/lib/timeline";
 
 export const DEFAULT_SERVER_URL = "http://127.0.0.1:3931";
 
@@ -45,15 +45,18 @@ export interface Frame {
     id: number;
     ts: string;
     monitor: number | null;
-    workspace: number | null;
+    workspace: string | null;
     window_class: string;
     window_title: string | null;
     fullscreen: number;
     trigger: string;
     image_path: string;
+    image_bytes: number | null;
     ocr_text: string | null;
+    ocr_sec: number | null;
     ocr_engine: string | null;
     a11y_text: string | null;
+    a11y_json: string | null;
 }
 
 export interface Session {
@@ -143,6 +146,19 @@ export function fetchDaySessions(base: string, day: string): Promise<Session[]> 
     const { start, end } = dayBoundsISO(day);
     const params = new URLSearchParams({ start, end });
     return fetchAll<Session>(base, "/sessions", params);
+}
+
+export async function fetchRecentSessions(base: string, days = 7): Promise<Session[]> {
+    const out = new Map<number, Session>();
+    for (let i = 0; i < days; i++) {
+        const d = new Date();
+        d.setDate(d.getDate() - i);
+        const items = await fetchDaySessions(base, dayStrOf(d));
+        for (const s of items) out.set(s.id, s);
+    }
+    return [...out.values()].sort(
+        (a, b) => new Date(b.ts_start).getTime() - new Date(a.ts_start).getTime(),
+    );
 }
 
 export function fetchSearch(base: string, q: string, signal?: AbortSignal): Promise<SearchItem[]> {

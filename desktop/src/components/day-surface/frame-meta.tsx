@@ -1,0 +1,181 @@
+import { useState } from "react";
+import type { Frame, PipeRunResult } from "@/lib/api";
+import { formatTimeS } from "@/lib/format";
+import { srcOf } from "@/lib/frames";
+import { clsColor } from "@/lib/timeline";
+import { cn } from "@/lib/utils";
+import { Markdown } from "@/lib/markdown";
+
+interface FrameMetaProps {
+    baseUrl: string;
+    frame: Frame;
+    recapResult: PipeRunResult | null;
+    onRunRecap: () => void;
+    recapRunning: boolean;
+    apps: Array<{ cls: string; count: number; pct: number }>;
+    filterCls: string | null;
+    onFilter: (cls: string | null) => void;
+}
+
+export function FrameMeta({ frame, recapResult, onRunRecap, recapRunning, apps, filterCls, onFilter }: FrameMetaProps) {
+    const src = srcOf(frame);
+    const text = frame.a11y_text || frame.ocr_text || "";
+    return (
+        <>
+            <h2 className="mb-2.5 mt-6 text-[11px] tracking-[1.2px] text-faint uppercase first:mt-0">Frame</h2>
+            <div className="flex flex-col gap-2 rounded-md border border-line bg-surface-2 p-3 text-xs">
+                <Row k="time" v={formatTimeS(frame.ts) ?? "—"} mono />
+                <div className="flex items-center justify-between gap-2">
+                    <span className="shrink-0 text-faint">source</span>
+                    <SourceBadge src={src} />
+                </div>
+                <Row k="window" v={frame.window_class} mono />
+                <p className="text-xs break-words text-dim">{frame.window_title || "(untitled)"}</p>
+                <Row k="monitor" v={frame.monitor != null ? String(frame.monitor) : "—"} mono />
+                <Row k="workspace" v={frame.workspace ?? "—"} mono />
+                <Row
+                    k="capture"
+                    v={[frame.trigger, frame.fullscreen ? "fullscreen" : null].filter(Boolean).join(" · ")}
+                    mono
+                />
+                <Row
+                    k="ocr_sec"
+                    v={
+                        frame.ocr_sec != null
+                            ? `${frame.ocr_sec.toFixed(1)}s${frame.ocr_engine ? ` · ${frame.ocr_engine}` : ""}`
+                            : "—"
+                    }
+                    mono
+                />
+            </div>
+
+            <h2 className="mb-2.5 mt-6 text-[11px] tracking-[1.2px] text-faint uppercase">OCR text</h2>
+            <OcrBox text={text} />
+
+            <h2 className="mb-2.5 mt-6 text-[11px] tracking-[1.2px] text-faint uppercase">Recap</h2>
+            <div className="rounded-md border border-primary/25 bg-primary/7 p-3">
+                {recapResult ? (
+                    <>
+                        <div className="mb-1.5 text-[13px] font-semibold">{recapResult.pipe}</div>
+                        <Markdown text={recapResult.output_markdown} />
+                        <div className="mt-2 text-[10px] text-faint">
+                            {recapResult.frame_count} frames · {(recapResult.run_ms / 1000).toFixed(1)}s
+                        </div>
+                    </>
+                ) : (
+                    <>
+                        <div className="mb-1.5 text-[13px] font-semibold">Day recap</div>
+                        <p className="text-xs text-dim">
+                            What you watched and worked on today, synthesized from frames and transcripts.
+                        </p>
+                        <div className="mt-2">
+                            <button
+                                type="button"
+                                onClick={onRunRecap}
+                                disabled={recapRunning}
+                                className="rounded-sm border border-line bg-surface px-2.5 py-1 text-[10px] text-[var(--text-dim)] transition-colors hover:border-primary hover:text-foreground disabled:opacity-40"
+                            >
+                                {recapRunning ? "running…" : "⟳ synthesize"}
+                            </button>
+                        </div>
+                    </>
+                )}
+            </div>
+
+            <h2 className="mb-2.5 mt-6 text-[11px] tracking-[1.2px] text-faint uppercase">Apps</h2>
+            <div className="flex flex-col">
+                {apps.length === 0 && <p className="text-xs text-dim">No apps today.</p>}
+                <button
+                    type="button"
+                    className="flex items-center gap-2.5 rounded-sm px-2 py-1.5 text-left transition-colors hover:bg-surface-2"
+                    onClick={() => onFilter(null)}
+                    data-testid="apps-filter-clear"
+                >
+                    <span className="w-2 shrink-0 rounded-[3px] bg-border" />
+                    <div className="min-w-0 flex-1">
+                        <span className="text-xs text-dim">all apps</span>
+                    </div>
+                </button>
+                {apps.map((a) => {
+                    const active = filterCls === a.cls;
+                    return (
+                        <button
+                            key={a.cls}
+                            type="button"
+                            className={cn(
+                                "flex items-center gap-2.5 rounded-sm px-2 py-1.5 text-left transition-colors hover:bg-surface-2",
+                                active && "bg-surface-2",
+                            )}
+                            onClick={() => onFilter(active ? null : a.cls)}
+                            data-testid={`app-filter-${a.cls}`}
+                        >
+                            <span className="w-2 shrink-0 rounded-[3px]" style={{ background: clsColor(a.cls) }} />
+                            <div className="min-w-0 flex-1">
+                                <div className="flex items-baseline gap-2">
+                                    <span className="min-w-0 flex-1 truncate text-xs">{a.cls}</span>
+                                    <span className="shrink-0 font-mono text-[11px] text-faint">
+                                        {Math.round(a.pct)}% · {a.count}
+                                    </span>
+                                </div>
+                                <div className="mt-1 h-1 w-full overflow-hidden rounded-full bg-surface-2">
+                                    <span
+                                        className="block h-full rounded-full"
+                                        style={{ width: `${a.pct}%`, background: clsColor(a.cls) }}
+                                    />
+                                </div>
+                            </div>
+                        </button>
+                    );
+                })}
+            </div>
+        </>
+    );
+}
+
+function Row({ k, v, mono }: { k: string; v: string; mono?: boolean }) {
+    return (
+        <div className="flex justify-between gap-2.5">
+            <span className="shrink-0 text-faint">{k}</span>
+            <span className={cn("min-w-0 text-right break-words", mono && "font-mono")}>{v}</span>
+        </div>
+    );
+}
+
+export function SourceBadge({ src }: { src: "a11y" | "ocr" | "none" }) {
+    return (
+        <span
+            className={cn(
+                "rounded-full border px-2 py-0.5 text-[10px]",
+                src === "a11y" && "border-ok/40 text-ok",
+                src === "ocr" && "border-primary/40 text-primary",
+                src === "none" && "border-line text-[var(--text-faint)]",
+            )}
+        >
+            {src === "a11y" ? "a11y tree" : src === "ocr" ? "ocr" : "no text"}
+        </span>
+    );
+}
+
+function OcrBox({ text }: { text: string }) {
+    const [copied, setCopied] = useState(false);
+    return (
+        <div className="relative rounded-md border border-line bg-surface-2 p-3 text-xs text-dim">
+            {text || "No captured text for this frame."}
+            <button
+                type="button"
+                onClick={() => {
+                    try {
+                        void navigator.clipboard.writeText(text);
+                        setCopied(true);
+                        window.setTimeout(() => setCopied(false), 1200);
+                    } catch {
+                        /* clipboard unavailable */
+                    }
+                }}
+                className="absolute top-1.5 right-1.5 rounded-sm border border-line bg-surface px-2 py-0.5 font-mono text-[10px] text-dim transition-colors hover:border-primary hover:text-foreground"
+            >
+                {copied ? "copied" : "copy"}
+            </button>
+        </div>
+    );
+}

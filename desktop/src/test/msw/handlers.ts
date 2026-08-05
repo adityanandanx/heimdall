@@ -65,16 +65,16 @@ const at = (h: number, m = 0) =>
     new Date(today.getFullYear(), today.getMonth(), today.getDate(), h, m, 0, 0);
 
 export const frameFixtures = [
-    { id: 1, ts: at(9, 0), window_class: "code.editor", window_title: "timeline.ts — heimdall", workspace: 1, ocr_text: "axis of frames", a11y_text: null },
-    { id: 2, ts: at(9, 15), window_class: "browser", window_title: "Heimdall docs", workspace: 1, ocr_text: "readme", a11y_text: "Heimdall documentation" },
-    { id: 3, ts: at(9, 30), window_class: "terminal", window_title: "~/.local/bin", workspace: 2, ocr_text: "pnpm test", a11y_text: null },
-    { id: 4, ts: at(9, 45), window_class: "code.editor", window_title: "scrubber.tsx", workspace: 1, ocr_text: "pointer events", a11y_text: null },
-    { id: 5, ts: at(10, 0), window_class: "browser", window_title: "YouTube — omurice", workspace: 1, ocr_text: "video", a11y_text: null },
-    { id: 6, ts: at(10, 30), window_class: "browser", window_title: "YouTube — omurice", workspace: 1, ocr_text: "video", a11y_text: null },
-    { id: 7, ts: at(11, 0), window_class: "browser", window_title: "YouTube — omurice", workspace: 1, ocr_text: "video", a11y_text: null },
-    { id: 8, ts: at(11, 30), window_class: "code.editor", window_title: "routers.py", workspace: 1, ocr_text: "search endpoint", a11y_text: null },
-    { id: 9, ts: at(12, 0), window_class: "terminal", window_title: "~/.local/bin", workspace: 2, ocr_text: "git push", a11y_text: null },
-    { id: 10, ts: at(12, 30), window_class: "code.editor", window_title: "watch-lane.tsx", workspace: 1, ocr_text: "watched ranges", a11y_text: null },
+    { id: 1, ts: at(9, 0), window_class: "code.editor", window_title: "timeline.ts — heimdall", workspace: "3:3", ocr_text: "axis of frames", a11y_text: null },
+    { id: 2, ts: at(9, 15), window_class: "browser", window_title: "Heimdall docs", workspace: "3:3", ocr_text: "readme", a11y_text: "Heimdall documentation" },
+    { id: 3, ts: at(9, 30), window_class: "terminal", window_title: "~/.local/bin", workspace: "2:1", ocr_text: "pnpm test", a11y_text: null },
+    { id: 4, ts: at(9, 45), window_class: "code.editor", window_title: "scrubber.tsx", workspace: "3:3", ocr_text: "pointer events", a11y_text: null },
+    { id: 5, ts: at(10, 0), window_class: "browser", window_title: "YouTube — omurice", workspace: "3:3", ocr_text: "video", a11y_text: null },
+    { id: 6, ts: at(10, 30), window_class: "browser", window_title: "YouTube — omurice", workspace: "3:3", ocr_text: "video", a11y_text: null },
+    { id: 7, ts: at(11, 0), window_class: "browser", window_title: "YouTube — omurice", workspace: "3:3", ocr_text: "video", a11y_text: null },
+    { id: 8, ts: at(11, 30), window_class: "code.editor", window_title: "routers.py", workspace: "3:3", ocr_text: "search endpoint", a11y_text: null },
+    { id: 9, ts: at(12, 0), window_class: "terminal", window_title: "~/.local/bin", workspace: "2:1", ocr_text: "git push", a11y_text: null },
+    { id: 10, ts: at(12, 30), window_class: "code.editor", window_title: "watch-lane.tsx", workspace: "3:3", ocr_text: "watched ranges", a11y_text: null },
 ].map((f) => ({
     id: f.id,
     ts: localISO(f.ts),
@@ -85,9 +85,12 @@ export const frameFixtures = [
     fullscreen: 0,
     trigger: "interval",
     image_path: `/tmp/heimdall/frames/${f.id}.png`,
+    image_bytes: 8642,
     ocr_text: f.ocr_text,
-    ocr_engine: null,
+    ocr_sec: 0.8,
+    ocr_engine: "easyocr",
     a11y_text: f.a11y_text,
+    a11y_json: null,
 }));
 
 export const sessionFixtures = [

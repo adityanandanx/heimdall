@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 import {
     fetchDayFrames,
     fetchDaySessions,
+    fetchRecentSessions,
     fetchSearch,
     runPipe,
     type PipeRunResult,
@@ -22,6 +23,16 @@ export function useDaySessions(baseUrl: string, day: string) {
         queryKey: ["day-sessions", baseUrl, day],
         queryFn: () => fetchDaySessions(baseUrl, day),
         enabled: !!baseUrl && !!day,
+        refetchOnWindowFocus: false,
+    });
+}
+
+export function useRecentSessions(baseUrl: string, days = 7) {
+    return useQuery({
+        queryKey: ["recent-sessions", baseUrl, days],
+        queryFn: () => fetchRecentSessions(baseUrl, days),
+        enabled: !!baseUrl,
+        staleTime: 30_000,
         refetchOnWindowFocus: false,
     });
 }

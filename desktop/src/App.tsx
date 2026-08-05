@@ -1,67 +1,112 @@
-import { useEffect, useState } from "react";
-import { getServerUrl } from "@/lib/settings";
-import { ServerSettings } from "@/components/server-settings";
-import { StatusView } from "@/components/status-view";
-import { DayBrowser } from "@/components/day-browser/day-browser";
-import { cn } from "@/lib/utils";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { getServerUrl, setServerUrl as persistServerUrl } from "@/lib/settings";
+import type { SurfaceId } from "@/lib/surfaces";
+import { Shell } from "@/components/shell";
+import { DaySurface } from "@/components/day-surface/day-surface";
+import { SearchSurface } from "@/components/search-surface";
+import { SessionsSurface } from "@/components/sessions-surface";
+import { StatusSurface } from "@/components/status-surface";
+import { SettingsSurface } from "@/components/settings-surface";
+import { dayStrOf } from "@/lib/timeline";
+import { useHealth } from "@/hooks/use-day-browser";
+import type { SearchItem, Session } from "@/lib/api";
 
-type Tab = "status" | "day";
-
-const TABS: Array<{ id: Tab; label: string }> = [
-    { id: "status", label: "Status" },
-    { id: "day", label: "Day browser" },
-];
+const LS_REFRESH = "heimdall.refreshSeconds";
 
 function App() {
-    const [serverUrl, setServerUrl] = useState<string | null>(null);
-    const [tab, setTab] = useState<Tab>("day");
+    const [serverUrl, setServerUrlState] = useState<string | null>(null);
+    const [surface, setSurface] = useState<SurfaceId>("day");
+    const [day, setDay] = useState<string | null>(null);
+    const [seek, setSeek] = useState<{ ts: number; nonce: number } | null>(null);
+    const [focusNonce, setFocusNonce] = useState(0);
+    const [refreshSeconds, setRefreshSeconds] = useState(() => {
+        const v = Number(window.localStorage.getItem(LS_REFRESH));
+        return Number.isFinite(v) && v > 0 ? v : 10;
+    });
 
     useEffect(() => {
         let cancelled = false;
         getServerUrl().then((url) => {
-            if (!cancelled) setServerUrl(url);
+            if (!cancelled) setServerUrlState(url);
         });
         return () => {
             cancelled = true;
         };
     }, []);
 
-    return (
-        <main className="mx-auto max-w-7xl px-6 py-8">
-            <header className="mb-6">
-                <div className="flex items-center gap-4">
-                    <h1 className="text-2xl font-semibold tracking-tight">Heimdall</h1>
-                    <nav className="flex gap-1" aria-label="views">
-                        {TABS.map((t) => (
-                            <button
-                                key={t.id}
-                                type="button"
-                                onClick={() => setTab(t.id)}
-                                className={cn(
-                                    "rounded-lg px-3 py-1 text-sm font-medium transition-colors",
-                                    tab === t.id
-                                        ? "bg-muted text-foreground"
-                                        : "text-muted-foreground hover:text-foreground",
-                                )}
-                            >
-                                {t.label}
-                            </button>
-                        ))}
-                    </nav>
-                    <span className="ml-auto">
-                        <ServerSettings value={serverUrl} onSaved={setServerUrl} />
-                    </span>
-                </div>
-            </header>
+    const setServerUrl = useCallback((url: string) => {
+        setServerUrlState(url);
+        void persistServerUrl(url);
+    }, []);
 
+    const setRefresh = useCallback((s: number) => {
+        setRefreshSeconds(s);
+        window.localStorage.setItem(LS_REFRESH, String(s));
+    }, []);
+
+    const navigate = useCallback((id: SurfaceId) => {
+        setSurface(id);
+        if (id === "search") setFocusNonce((n) => n + 1);
+    }, []);
+
+    const jumpTo = useCallback((ts: number) => {
+        setDay(dayStrOf(new Date(ts)));
+        setSeek({ ts, nonce: Date.now() });
+        setSurface("day");
+    }, []);
+
+    const online = useHealth(serverUrl ?? "").data !== undefined;
+
+    const content = useMemo(() => {
+        if (serverUrl === null) return null;
+        switch (surface) {
+            case "day":
+                return (
+                    <DaySurface
+                        baseUrl={serverUrl}
+                        day={day ?? dayStrOf(new Date())}
+                        onDayChange={setDay}
+                        seek={seek}
+                        onSeekDone={() => setSeek(null)}
+                    />
+                );
+            case "search":
+                return (
+                    <SearchSurface
+                        baseUrl={serverUrl}
+                        focusNonce={focusNonce}
+                        onPick={(item: SearchItem) => jumpTo(new Date(item.ts).getTime())}
+                    />
+                );
+            case "sessions":
+                return (
+                    <SessionsSurface
+                        baseUrl={serverUrl}
+                        onJump={(s: Session) => jumpTo(new Date(s.ts_start).getTime())}
+                    />
+                );
+            case "status":
+                return <StatusSurface baseUrl={serverUrl} />;
+            case "settings":
+                return (
+                    <SettingsSurface
+                        serverUrl={serverUrl}
+                        onServerUrl={setServerUrl}
+                        refreshSeconds={refreshSeconds}
+                        onRefreshSeconds={setRefresh}
+                    />
+                );
+        }
+    }, [serverUrl, surface, day, seek, focusNonce, refreshSeconds, setServerUrl, setRefresh, jumpTo]);
+
+    return (
+        <Shell surface={surface} onSurface={navigate} onGlobalSearch={() => navigate("search")} online={online}>
             {serverUrl === null ? (
-                <p className="text-sm text-muted-foreground">Loading…</p>
-            ) : tab === "status" ? (
-                <StatusView baseUrl={serverUrl} />
+                <p className="p-7 text-xs text-dim">loading…</p>
             ) : (
-                <DayBrowser baseUrl={serverUrl} />
+                content
             )}
-        </main>
+        </Shell>
     );
 }
 
