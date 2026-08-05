@@ -1,6 +1,9 @@
-import { useLayoutEffect, useMemo, useRef } from "react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Frame, Session } from "@/lib/api";
-import { formatTime } from "@/lib/format";
+import { frameImageUrl } from "@/lib/api";
+import { formatTime, formatTimeS } from "@/lib/format";
+import { srcOf } from "@/lib/frames";
+import { SourceBadge } from "./frame-meta";
 import {
     assignLanes,
     axisOf,
@@ -22,7 +25,10 @@ const DOTS_ROW_H = 32;
 const LANE_H = 22;
 const BLOCK_H = 14;
 
+const POPUP_W = 176;
+
 interface FilmstripProps {
+    baseUrl: string;
     frames: Frame[];
     sessions: Session[];
     selected: Frame | null;
@@ -31,10 +37,15 @@ interface FilmstripProps {
     filterCls: string | null;
     ppm: number;
     onPpmChange: (ppm: number) => void;
-    onHover: (f: Frame | null) => void;
 }
 
-export function Filmstrip({ frames, sessions, selected, onSelect, hits, filterCls, ppm, onPpmChange, onHover }: FilmstripProps) {
+interface HoverState {
+    f: Frame;
+    x: number;
+    y: number;
+}
+
+export function Filmstrip({ baseUrl, frames, sessions, selected, onSelect, hits, filterCls, ppm, onPpmChange }: FilmstripProps) {
     const axis = useMemo<Span[]>(() => (frames.length > 1 ? buildAxis(frames, ppm) : []), [frames, ppm]);
     const axisW = axisWidth(axis);
 
@@ -45,6 +56,7 @@ export function Filmstrip({ frames, sessions, selected, onSelect, hits, filterCl
     const anchorFracRef = useRef(0);
     const anchorKeepRef = useRef(-1);
     const hoverIdRef = useRef<number | null>(null);
+    const [hov, setHov] = useState<HoverState | null>(null);
 
     const runs = useMemo(() => buildRuns(sessions), [sessions]);
     const laneRuns = useMemo(() => assignLanes(runs), [runs]);
@@ -93,28 +105,27 @@ export function Filmstrip({ frames, sessions, selected, onSelect, hits, filterCl
         onPpmChange(clamp(Math.round(ppm * factor), MIN_PPM, MAX_PPM));
     }
 
-    function frameAt(clientX: number) {
+    function frameAt(clientX: number, clientY: number) {
         const timeline = timelineRef.current;
         if (!timeline || !axis.length) return null;
         const rect = timeline.getBoundingClientRect();
         const x = clamp(clientX - rect.left, 0, axisW);
-        return { f: frameNear(frames, tsOf(axis, x)), x };
+        return { f: frameNear(frames, tsOf(axis, x)), clientX, clientY };
     }
 
-    function hover(clientX: number) {
-        const hit = frameAt(clientX);
+    function hover(clientX: number, clientY: number) {
+        const hit = frameAt(clientX, clientY);
         if (!hit) return;
         if (hit.f.id !== hoverIdRef.current) {
             hoverIdRef.current = hit.f.id;
-            onHover(hit.f);
         }
+        setHov({ f: hit.f, x: hit.clientX, y: hit.clientY });
     }
 
     function seek(clientX: number) {
-        const hit = frameAt(clientX);
+        const hit = frameAt(clientX, 0);
         if (!hit) return;
         hoverIdRef.current = hit.f.id;
-        onHover(hit.f);
         onSelect(hit.f);
     }
 
@@ -152,12 +163,13 @@ export function Filmstrip({ frames, sessions, selected, onSelect, hits, filterCl
                         onPointerDown={(e) => {
                             if (e.button !== 0) return;
                             draggingRef.current = true;
+                            setHov(null);
                             timelineRef.current?.setPointerCapture(e.pointerId);
                             seek(e.clientX);
                         }}
                         onPointerMove={(e) => {
                             if (draggingRef.current) seek(e.clientX);
-                            else hover(e.clientX);
+                            else hover(e.clientX, e.clientY);
                         }}
                         onPointerUp={() => {
                             draggingRef.current = false;
@@ -165,7 +177,7 @@ export function Filmstrip({ frames, sessions, selected, onSelect, hits, filterCl
                         onPointerLeave={() => {
                             if (!draggingRef.current) {
                                 hoverIdRef.current = null;
-                                onHover(null);
+                                setHov(null);
                             }
                         }}
                         onPointerCancel={() => {
@@ -265,6 +277,41 @@ export function Filmstrip({ frames, sessions, selected, onSelect, hits, filterCl
                         )}
                     </div>
                 </div>
+            </div>
+
+            {hov && <HoverPopup hov={hov} baseUrl={baseUrl} />}
+        </div>
+    );
+}
+
+function HoverPopup({ hov, baseUrl }: { hov: HoverState; baseUrl: string }) {
+    const left = clamp(hov.x + 16, 8, window.innerWidth - POPUP_W - 8);
+    const top = clamp(hov.y - 108, 8, Math.max(8, window.innerHeight - 128));
+    return (
+        <div
+            className="pointer-events-none fixed z-50 overflow-hidden rounded-md border border-line bg-surface shadow-[var(--e1)]"
+            style={{ left, top, width: POPUP_W }}
+            data-testid="hover-popup"
+        >
+            <div className="h-20 w-full overflow-hidden bg-[linear-gradient(135deg,var(--surface-2),var(--surface))]">
+                <img
+                    src={frameImageUrl(baseUrl, hov.f.id)}
+                    alt=""
+                    className="h-full w-full object-cover"
+                    loading="lazy"
+                />
+            </div>
+            <div className="flex flex-col gap-1 p-2">
+                <div className="flex items-center gap-2">
+                    <b className="font-mono text-[11px]">{formatTimeS(hov.f.ts)}</b>
+                    <span className="ml-auto">
+                        <SourceBadge src={srcOf(hov.f)} />
+                    </span>
+                </div>
+                <span className="truncate text-[10px] text-dim">{hov.f.window_class}</span>
+                {hov.f.window_title && (
+                    <span className="truncate text-[10px] text-faint">{hov.f.window_title}</span>
+                )}
             </div>
         </div>
     );

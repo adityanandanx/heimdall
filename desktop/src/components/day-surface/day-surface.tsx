@@ -20,7 +20,6 @@ interface DaySurfaceProps {
 export function DaySurface({ baseUrl, day, onDayChange, seek, onSeekDone }: DaySurfaceProps) {
     const [ppm, setPpm] = useState(14);
     const [selected, setSelected] = useState<Frame | null>(null);
-    const [hovered, setHovered] = useState<Frame | null>(null);
     const [filterCls, setFilterCls] = useState<string | null>(null);
     const [dayQuery, setDayQuery] = useState("");
     const searchRef = useRef<HTMLInputElement>(null);
@@ -99,7 +98,7 @@ export function DaySurface({ baseUrl, day, onDayChange, seek, onSeekDone }: DayS
             .sort((a, b) => b.count - a.count);
     }, [frames]);
 
-    const caption = hovered ?? selectedFrame;
+    const caption = selectedFrame;
 
     const recapResult = recap.results["day-recap"] ?? recap.results["time-breakdown"];
 
@@ -219,6 +218,7 @@ export function DaySurface({ baseUrl, day, onDayChange, seek, onSeekDone }: DayS
                         )}
                     </div>
                     <Filmstrip
+                        baseUrl={baseUrl}
                         frames={frames}
                         sessions={sessions}
                         selected={selectedFrame}
@@ -230,7 +230,6 @@ export function DaySurface({ baseUrl, day, onDayChange, seek, onSeekDone }: DayS
                         filterCls={filterCls}
                         ppm={ppm}
                         onPpmChange={setPpm}
-                        onHover={setHovered}
                     />
                 </div>
 

@@ -71,6 +71,27 @@ describe("DaySurface", () => {
         expect(onDayChange).toHaveBeenLastCalledWith(shiftDay(fixtureDay, 1));
     });
 
+    it("shows a hover popup over the timeline without changing the main preview", async () => {
+        renderDay();
+        await screen.findAllByText(/watch-lane\.tsx/); // last frame selected in the main preview
+        const timeline = screen.getByTestId("filmstrip-timeline");
+        fireEvent.pointerMove(timeline, { clientX: 10, clientY: 10 });
+        const popup = await screen.findByTestId("hover-popup");
+        expect(popup).toHaveTextContent(/\d{2}:\d{2}:\d{2}/); // shows a frame's time
+        expect(popup).not.toHaveTextContent("watch-lane.tsx"); // never the main preview
+        expect(screen.getAllByText(/watch-lane\.tsx/).length).toBeGreaterThan(0); // main unchanged
+    });
+
+    it("dismisses the hover popup when the pointer leaves", async () => {
+        renderDay();
+        await screen.findAllByText(/watch-lane\.tsx/);
+        const timeline = screen.getByTestId("filmstrip-timeline");
+        fireEvent.pointerMove(timeline, { clientX: 10, clientY: 10 });
+        await screen.findByTestId("hover-popup");
+        fireEvent.pointerLeave(timeline);
+        expect(screen.queryByTestId("hover-popup")).not.toBeInTheDocument();
+    });
+
     it("runs the day recap and renders its markdown", async () => {
         renderDay();
         await screen.findByText("⟳ synthesize");
