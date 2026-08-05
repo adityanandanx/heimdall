@@ -88,6 +88,7 @@ export interface SearchItem {
     snippet: string;
     score: number;
     kind: "frame" | "session";
+    player?: string | null;
 }
 
 export interface PipeRunResult {
@@ -172,6 +173,30 @@ export function fetchSearch(
         apiUrl(base, "/search") + `?${full}`,
         signal,
     ).then((body) => body.items);
+}
+
+export interface FacetValue {
+    value: string;
+    count: number;
+}
+
+export interface FacetResponse {
+    apps: FacetValue[];
+    players: FacetValue[];
+}
+
+/** Facet counts for the current scope (top apps/players, #57). */
+export function fetchFacets(
+    base: string,
+    params: URLSearchParams,
+    signal?: AbortSignal,
+): Promise<FacetResponse> {
+    const clean = new URLSearchParams();
+    for (const key of ["q", "kind", "start", "end"]) {
+        const value = params.get(key);
+        if (value) clean.set(key, value);
+    }
+    return fetchJson<FacetResponse>(apiUrl(base, "/search/facets") + `?${clean}`, signal);
 }
 
 export async function runPipe(base: string, name: string, day: string): Promise<PipeRunResult> {

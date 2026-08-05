@@ -157,6 +157,17 @@ export const searchFixtures = [
         kind: "frame",
     },
     {
+        id: 4,
+        ts: localISO(at(14, 0)),
+        window_class: "terminal",
+        window_title: "htop",
+        workspace: 1,
+        image_path: "/tmp/heimdall/frames/4.png",
+        snippet: "process **monitor** — pid column",
+        score: 0.5,
+        kind: "frame",
+    },
+    {
         id: 21,
         ts: localISO(at(10, 0)),
         window_class: "sidra",
@@ -166,18 +177,38 @@ export const searchFixtures = [
         snippet: "uncle roger review the most difficult **omelet**",
         score: 1.4,
         kind: "session",
+        player: "sidra",
+    },
+    {
+        id: 23,
+        ts: localISO(at(13, 0)),
+        window_class: "vlc",
+        window_title: "Rust borrow checker deep dive",
+        workspace: 1,
+        image_path: "",
+        snippet: "**borrow** checker explained with lifetimes",
+        score: 0.9,
+        kind: "session",
+        player: "vlc",
     },
 ];
+
+type SearchFixture = (typeof searchFixtures)[number];
 
 // Which text source each search fixture won by, for the source= filter.
 const searchSources: Record<number, "a11y" | "ocr" | "session"> = {
     2: "a11y",
     3: "ocr",
+    4: "ocr",
     21: "session",
+    23: "session",
 };
 
 /** Every /search request the UI made this session (URL strings), for tests. */
 export const searchRequestUrls: string[] = [];
+
+/** Every /search/facets request the UI made this session, for tests. */
+export const searchFacetsRequestUrls: string[] = [];
 
 export const pipesPayload = {
     "day-recap": {
@@ -256,6 +287,35 @@ export const handlers = [
         if (end) items = items.filter((s) => s.ts <= end);
         items = [...items].sort((a, b) => (a.ts < b.ts ? 1 : a.ts > b.ts ? -1 : 0));
         return HttpResponse.json({ total: items.length, items });
+    }),
+    http.get(`${base}/search/facets`, ({ request }) => {
+        const url = new URL(request.url);
+        searchFacetsRequestUrls.push(request.url);
+        const q = url.searchParams.get("q")?.toLowerCase() ?? "";
+        const kind = url.searchParams.get("kind");
+        const start = url.searchParams.get("start");
+        const end = url.searchParams.get("end");
+        const inScope = (s: SearchFixture) =>
+            (kind ? s.kind === kind : true) &&
+            (s.snippet + s.window_class + (s.window_title ?? "")).toLowerCase().includes(q) &&
+            (!start || s.ts >= start) &&
+            (!end || s.ts <= end);
+        const facet = (rows: SearchFixture[], key: (s: SearchFixture) => string) => {
+            const counts = new Map<string, number>();
+            for (const row of rows) {
+                const value = key(row);
+                counts.set(value, (counts.get(value) ?? 0) + 1);
+            }
+            return [...counts.entries()]
+                .map(([value, count]) => ({ value, count }))
+                .sort((a, b) => b.count - a.count || (a.value < b.value ? -1 : 1))
+                .slice(0, 25);
+        };
+        const scoped = searchFixtures.filter(inScope);
+        return HttpResponse.json({
+            apps: facet(scoped.filter((s) => s.kind === "frame"), (s) => s.window_class),
+            players: facet(scoped.filter((s) => s.kind === "session"), (s) => s.player ?? s.window_class),
+        });
     }),
     http.post(`${base}/pipes/run/:name`, ({ params }) => {
         const name = params.name as keyof typeof pipesPayload;

@@ -6,16 +6,20 @@ import { srcOf } from "@/lib/frames";
 import { dayStrOf } from "@/lib/timeline";
 import {
     activeChips,
+    compileSearchParams,
     DEFAULT_FILTERS,
     KINDS,
     PRESETS,
+    searchActive,
     SOURCES,
+    toggleValue,
     withChipRemoved,
     type ChipId,
     type SearchFilters,
 } from "@/lib/search-filters";
 import { cn } from "@/lib/utils";
-import { useDayFrames, useSearch } from "@/hooks/use-day-browser";
+import { FacetDropdown } from "@/components/ui/facet-dropdown";
+import { useDayFrames, useDebouncedValue, useFacets, useSearch } from "@/hooks/use-day-browser";
 
 interface SearchSurfaceProps {
     baseUrl: string;
@@ -32,7 +36,14 @@ export function SearchSurface({ baseUrl, focusNonce, seed, onPick }: SearchSurfa
     const [filters, setFilters] = useState<SearchFilters>(DEFAULT_FILTERS);
     const inputRef = useRef<HTMLInputElement>(null);
 
-    const { data, isFetching } = useSearch(baseUrl, q, filters);
+    const params = useMemo(() => compileSearchParams(filters, q), [filters, q]);
+    const active = useMemo(() => searchActive(filters, q), [filters, q]);
+    // Debounce params and the gate as ONE object so they can never land in
+    // an inconsistent intermediate state (spurious browse fetches).
+    const scope = useMemo(() => ({ params, active }), [params, active]);
+    const debounced = useDebouncedValue(scope, 250);
+    const { data, isFetching } = useSearch(baseUrl, debounced.params, debounced.active);
+    const { data: facets } = useFacets(baseUrl, debounced.params);
 
     // Autofocus when the surface opens (or is summoned with ⌘K).
     useEffect(() => {
@@ -52,8 +63,26 @@ export function SearchSurface({ baseUrl, focusNonce, seed, onPick }: SearchSurfa
 
     const query = q.trim();
     const chips = useMemo(() => activeChips(filters), [filters]);
-    // Show whatever the query holds right now — no gate to drift from the hook.
-    const showResults = data !== undefined || isFetching;
+    // Same gate the fetch hook uses (on raw state, so clearing filters hides
+    // stale results instantly rather than after the debounce).
+    const showResults = active;
+    // /search's window_class/player params are single-valued, so the
+    // multi-select app/player filters apply client-side (#59).
+    const filtered = useMemo(() => {
+        if (!data) return data;
+        let items = data;
+        if (filters.apps.length > 0) {
+            items = items.filter((i) => filters.apps.includes(i.window_class));
+        }
+        if (filters.players.length > 0) {
+            items = items.filter((i) =>
+                i.kind === "session"
+                    ? filters.players.includes(i.player ?? "")
+                    : true,
+            );
+        }
+        return items;
+    }, [data, filters.apps, filters.players]);
 
     return (
         <div className="flex h-full flex-col gap-4 overflow-y-auto p-7">
@@ -154,6 +183,22 @@ export function SearchSurface({ baseUrl, focusNonce, seed, onPick }: SearchSurfa
                         </option>
                     ))}
                 </select>
+                <FacetDropdown
+                    label="app"
+                    options={facets?.apps ?? []}
+                    selected={filters.apps}
+                    onToggle={(value) => patch({ apps: toggleValue(filters.apps, value) })}
+                    onClear={() => patch({ apps: [] })}
+                    className={CONTROL_CLASS}
+                />
+                <FacetDropdown
+                    label="player"
+                    options={facets?.players ?? []}
+                    selected={filters.players}
+                    onToggle={(value) => patch({ players: toggleValue(filters.players, value) })}
+                    onClear={() => patch({ players: [] })}
+                    className={CONTROL_CLASS}
+                />
             </div>
 
             {chips.length > 0 && (
@@ -175,10 +220,10 @@ export function SearchSurface({ baseUrl, focusNonce, seed, onPick }: SearchSurfa
 
             {showResults && (
                 <div className="grid grid-cols-[repeat(auto-fill,minmax(240px,1fr))] items-start gap-3">
-                    {(data ?? []).map((item) => (
+                    {(filtered ?? []).map((item) => (
                         <ResultCard key={`${item.kind}-${item.id}`} item={item} query={query} baseUrl={baseUrl} onPick={onPick} />
                     ))}
-                    {data && data.length === 0 && (
+                    {filtered && filtered.length === 0 && (
                         <p className="col-span-full text-xs text-dim">No matches.</p>
                     )}
                 </div>

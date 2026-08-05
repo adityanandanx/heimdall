@@ -111,10 +111,10 @@ describe("SearchSurface", () => {
     it("returns to idle when the last chip is removed with no text", async () => {
         renderSearch();
         fireEvent.click(screen.getByRole("button", { name: "sessions" }));
-        await screen.findByText("watch session");
+        await screen.findByText("Omurice — Uncle Roger");
         const requestsAfterBrowse = searchRequestUrls.length;
         fireEvent.click(screen.getByRole("button", { name: "remove sessions filter" }));
-        await waitFor(() => expect(screen.queryByText("watch session")).not.toBeInTheDocument());
+        await waitFor(() => expect(screen.queryByText("Omurice — Uncle Roger")).not.toBeInTheDocument());
         expect(searchRequestUrls).toHaveLength(requestsAfterBrowse); // no extra fetch
     });
 
@@ -180,8 +180,80 @@ describe("SearchSurface", () => {
         expect(await screen.findByText("Heimdall docs")).toBeInTheDocument();
         expect(screen.queryByText("PNG spec")).not.toBeInTheDocument();
         fireEvent.change(screen.getByLabelText("source type"), { target: { value: "transcript" } });
-        expect(await screen.findByText("watch session")).toBeInTheDocument();
+        expect(await screen.findByText("Omurice — Uncle Roger")).toBeInTheDocument();
+        expect(screen.getByText("Rust borrow checker deep dive")).toBeInTheDocument();
         expect(screen.queryByText("Heimdall docs")).not.toBeInTheDocument();
         expect(screen.queryByText("PNG spec")).not.toBeInTheDocument();
+    });
+
+    it("shows facet counts and filters results by selected apps", async () => {
+        renderSearch();
+        fireEvent.click(screen.getByRole("button", { name: /^app/ }));
+        expect(await screen.findByRole("checkbox", { name: "app browser" })).toBeInTheDocument();
+        expect(screen.getByRole("checkbox", { name: "app terminal" })).toBeInTheDocument();
+        expect(screen.getByText("· 2")).toBeInTheDocument(); // browser count
+        fireEvent.click(screen.getByRole("checkbox", { name: "app browser" }));
+        expect(await screen.findByRole("button", { name: "remove browser filter" })).toBeInTheDocument();
+        expect(await screen.findByText("Heimdall docs")).toBeInTheDocument();
+        expect(screen.getByText("PNG spec")).toBeInTheDocument();
+        expect(screen.queryByText("htop")).not.toBeInTheDocument(); // terminal frame filtered out
+    });
+
+    it("filters sessions by selected players, leaving frames alone", async () => {
+        renderSearch();
+        fireEvent.click(screen.getByRole("button", { name: /^player/ }));
+        fireEvent.click(await screen.findByRole("checkbox", { name: "player sidra" }));
+        expect(await screen.findByRole("button", { name: "remove sidra filter" })).toBeInTheDocument();
+        expect(await screen.findByText("Omurice — Uncle Roger")).toBeInTheDocument();
+        expect(screen.queryByText("Rust borrow checker deep dive")).not.toBeInTheDocument();
+        expect(screen.getByText("Heimdall docs")).toBeInTheDocument(); // frames unaffected
+    });
+
+    it("refreshes facet counts as the query scope changes", async () => {
+        renderSearch();
+        fireEvent.change(screen.getByLabelText("search query"), { target: { value: "roger" } });
+        await screen.findByText("Omurice — Uncle Roger");
+        fireEvent.click(screen.getByRole("button", { name: /^app/ }));
+        expect(await screen.findByText("No apps.")).toBeInTheDocument();
+        fireEvent.click(screen.getByRole("button", { name: /^player/ }));
+        expect(await screen.findByRole("checkbox", { name: "player sidra" })).toBeInTheDocument();
+        expect(screen.queryByRole("checkbox", { name: "player vlc" })).not.toBeInTheDocument();
+    });
+
+    it("renders an empty state for empty facet lists", async () => {
+        renderSearch();
+        fireEvent.change(screen.getByLabelText("search query"), { target: { value: "zzzznothing" } });
+        await screen.findByText("No matches.");
+        fireEvent.click(screen.getByRole("button", { name: /^app/ }));
+        expect(await screen.findByText("No apps.")).toBeInTheDocument();
+        fireEvent.click(screen.getByRole("button", { name: /^player/ }));
+        expect(await screen.findByText("No players.")).toBeInTheDocument();
+    });
+
+    it("clear affordance empties the app selection", async () => {
+        renderSearch();
+        fireEvent.change(screen.getByLabelText("date range preset"), { target: { value: "today" } });
+        fireEvent.click(screen.getByRole("button", { name: /^app/ }));
+        fireEvent.click(await screen.findByRole("checkbox", { name: "app browser" }));
+        await waitFor(() => expect(screen.queryByText("htop")).not.toBeInTheDocument());
+        fireEvent.click(await screen.findByRole("checkbox", { name: "app terminal" }));
+        fireEvent.click(screen.getByRole("button", { name: "clear" }));
+        await waitFor(() =>
+            expect(screen.queryByRole("button", { name: "remove browser filter" })).not.toBeInTheDocument(),
+        );
+        expect(await screen.findByText("htop")).toBeInTheDocument(); // unfiltered again
+    });
+
+    it("applies only the latest scope when text changes rapidly", async () => {
+        renderSearch();
+        fireEvent.change(screen.getByLabelText("search query"), { target: { value: "roger" } });
+        fireEvent.change(screen.getByLabelText("search query"), { target: { value: "zzzznothing" } });
+        expect(await screen.findByText("No matches.")).toBeInTheDocument();
+        expect(screen.queryByText("Omurice — Uncle Roger")).not.toBeInTheDocument();
+        fireEvent.click(screen.getByRole("button", { name: /^app/ }));
+        expect(await screen.findByText("No apps.")).toBeInTheDocument();
+        expect(screen.queryByRole("checkbox", { name: "app browser" })).not.toBeInTheDocument();
+        expect(new URL(searchRequestUrls[searchRequestUrls.length - 1]).searchParams.get("q"))
+            .toBe("zzzznothing");
     });
 });

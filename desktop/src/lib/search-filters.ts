@@ -12,6 +12,11 @@ export interface SearchFilters {
     start: string;
     end: string;
     source: SourceFilter;
+    /** Multi-select app/player values (facet dropdowns, #59); /search's
+     * window_class/player params are single-valued, so these filter
+     * client-side while the facets endpoint counts the full scope. */
+    apps: string[];
+    players: string[];
 }
 
 export const DEFAULT_FILTERS: SearchFilters = {
@@ -20,6 +25,8 @@ export const DEFAULT_FILTERS: SearchFilters = {
     start: "",
     end: "",
     source: "any",
+    apps: [],
+    players: [],
 };
 
 export const KINDS: Array<{ id: KindFilter; label: string }> = [
@@ -51,12 +58,26 @@ export function hasSource(f: SearchFilters): boolean {
     return f.source !== "any";
 }
 
+export function hasApps(f: SearchFilters): boolean {
+    return f.apps.length > 0;
+}
+
+export function hasPlayers(f: SearchFilters): boolean {
+    return f.players.length > 0;
+}
+
 export function hasDate(f: SearchFilters): boolean {
     return f.preset !== "all" || f.start !== "" || f.end !== "";
 }
 
 export function isDefaultFilters(f: SearchFilters): boolean {
-    return !hasKind(f) && !hasSource(f) && !hasDate(f);
+    return !hasKind(f) && !hasSource(f) && !hasApps(f) && !hasPlayers(f) && !hasDate(f);
+}
+
+/** Is a search scope active (text ready, or any filter set)? The single gate
+ * both the fetch hook and the results grid consume (#58/#59). */
+export function searchActive(f: SearchFilters, q: string): boolean {
+    return q.trim().length >= 2 || !isDefaultFilters(f);
 }
 
 /** Resolve the custom start/end revealed by the state (dates in, ISOs out). */
@@ -106,20 +127,22 @@ export function compileSearchParams(f: SearchFilters, q: string): URLSearchParam
     return params;
 }
 
-export type ChipId = "kind" | "source" | "date";
+export type ChipId = "kind" | "source" | "date" | `app:${string}` | `player:${string}`;
 
 export interface ActiveChip {
     id: ChipId;
     label: string;
 }
 
-/** The removable chips shown while a filter is active (slim row, #58). */
+/** The removable chips shown while a filter is active (slim row, #58/#59). */
 export function activeChips(f: SearchFilters): ActiveChip[] {
     const chips: ActiveChip[] = [];
     const kindLabel = KINDS.find((k) => k.id === f.kind)?.label;
     const sourceLabel = SOURCES.find((s) => s.id === f.source)?.label;
     if (hasKind(f) && kindLabel) chips.push({ id: "kind", label: kindLabel });
     if (hasSource(f) && sourceLabel) chips.push({ id: "source", label: sourceLabel });
+    for (const app of f.apps) chips.push({ id: `app:${app}`, label: app });
+    for (const player of f.players) chips.push({ id: `player:${player}`, label: player });
     if (hasDate(f)) {
         let label: string;
         if (f.start || f.end) {
@@ -142,5 +165,21 @@ export function withChipRemoved(f: SearchFilters, id: ChipId): SearchFilters {
             return { ...f, source: "any" };
         case "date":
             return { ...f, preset: "all", start: "", end: "" };
+        default: {
+            if (id.startsWith("app:")) {
+                const app = id.slice(4);
+                return { ...f, apps: f.apps.filter((a) => a !== app) };
+            }
+            if (id.startsWith("player:")) {
+                const player = id.slice(7);
+                return { ...f, players: f.players.filter((p) => p !== player) };
+            }
+            return f;
+        }
     }
+}
+
+/** Toggle one value in a multi-select list (facet dropdowns). */
+export function toggleValue(list: string[], value: string): string[] {
+    return list.includes(value) ? list.filter((v) => v !== value) : [...list, value];
 }

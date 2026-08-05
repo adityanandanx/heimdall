@@ -1,17 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
     fetchDayFrames,
     fetchDaySessions,
+    fetchFacets,
     fetchRecentSessions,
     fetchSearch,
     runPipe,
     type PipeRunResult,
 } from "@/lib/api";
-import {
-    compileSearchParams,
-    type SearchFilters,
-} from "@/lib/search-filters";
 
 export function useDayFrames(baseUrl: string, day: string) {
     return useQuery({
@@ -50,24 +47,26 @@ export function useDebouncedValue<T>(value: T, delayMs: number): T {
     return debounced;
 }
 
-export function useSearch(baseUrl: string, query: string, filters: SearchFilters) {
-    const params = useMemo(() => compileSearchParams(filters, query), [filters, query]);
-    const debounced = useDebouncedValue(params, 250);
-    const enabled = useMemo(() => {
-        if (!baseUrl) return false;
-        const q = debounced.get("q") ?? "";
-        const filterActive =
-            debounced.has("kind") ||
-            debounced.has("source") ||
-            debounced.has("start") ||
-            debounced.has("end");
-        // Browse mode: text or any filter fetches; bare idle state does not.
-        return q.length >= 2 || filterActive;
-    }, [baseUrl, debounced]);
+export function useSearch(baseUrl: string, params: URLSearchParams, active: boolean) {
+    // `active` is the same searchActive(f, q) gate the component renders with,
+    // debounced; it covers client-side app/player filters that leave no
+    // server params behind (#59).
     return useQuery({
-        queryKey: ["search", baseUrl, debounced.toString()],
-        queryFn: ({ signal }) => fetchSearch(baseUrl, debounced, signal),
-        enabled,
+        queryKey: ["search", baseUrl, params.toString()],
+        queryFn: ({ signal }) => fetchSearch(baseUrl, params, signal),
+        enabled: !!baseUrl && active,
+        staleTime: 30_000,
+        refetchOnWindowFocus: false,
+    });
+}
+
+export function useFacets(baseUrl: string, params: URLSearchParams) {
+    // Counts refresh with the debounced scope; each scope is its own cache
+    // key, so late responses for an old scope are never applied (race-safe).
+    return useQuery({
+        queryKey: ["search-facets", baseUrl, params.toString()],
+        queryFn: ({ signal }) => fetchFacets(baseUrl, params, signal),
+        enabled: !!baseUrl,
         staleTime: 30_000,
         refetchOnWindowFocus: false,
     });
