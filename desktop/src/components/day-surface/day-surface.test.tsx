@@ -196,4 +196,83 @@ describe("DaySurface", () => {
         renderDay({ day: "2020-01-01" });
         expect(await screen.findByText("No captures for 2020-01-01.")).toBeInTheDocument();
     });
+
+    it("opens the three-zone filter dropdown on focus and closes on blur (#64)", async () => {
+        renderDay();
+        const input = await screen.findByPlaceholderText(/Search the day/);
+        fireEvent.focus(input);
+        // widget zone + chips zone + suggestions zone all present
+        const dd = await screen.findByTestId("day-suggest");
+        expect(dd).toHaveTextContent("type to search the day"); // suggestions zone hint
+        expect(screen.getByRole("group", { name: "day kind filter" })).toBeInTheDocument();
+        expect(screen.getByLabelText("day source filter")).toBeInTheDocument();
+        expect(screen.getByLabelText("after time")).toBeInTheDocument();
+        expect(screen.getByLabelText("before time")).toBeInTheDocument();
+        fireEvent.blur(input);
+        expect(screen.queryByTestId("day-suggest")).not.toBeInTheDocument();
+    });
+
+    it("day-scoped widgets write tokens and give time-of-day, not a date range (#64)", async () => {
+        renderDay();
+        const input = await screen.findByPlaceholderText(/Search the day/);
+        fireEvent.focus(input);
+        fireEvent.click(screen.getByRole("button", { name: "sessions" }));
+        expect(input).toHaveValue("kind:session");
+        fireEvent.change(screen.getByLabelText("after time"), { target: { value: "09:30" } });
+        expect(input).toHaveValue("kind:session after:09:30");
+        fireEvent.change(screen.getByLabelText("day source filter"), { target: { value: "transcript" } });
+        expect(input).toHaveValue("kind:session after:09:30 source:transcript");
+        expect(screen.getByRole("button", { name: "remove sessions filter" })).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: "remove after 09:30 filter" })).toBeInTheDocument();
+        fireEvent.click(screen.getByRole("button", { name: "remove after 09:30 filter" }));
+        expect(input).toHaveValue("kind:session source:transcript");
+    });
+
+    it("sidebar app chips and dropdown widget share one state (#64)", async () => {
+        renderDay();
+        await screen.findByText("⟳ synthesize");
+        const input = await screen.findByPlaceholderText(/Search the day/);
+        fireEvent.focus(input);
+        // entrance 1: sidebar chip
+        fireEvent.click(screen.getByTestId("app-filter-browser"));
+        expect(screen.getByRole("button", { name: "remove browser filter" })).toBeInTheDocument();
+        // entrance 2: dropdown pill reflects the same selection
+        const pill = screen.getByRole("button", { name: /^browser/, pressed: true });
+        expect(pill).toBeInTheDocument();
+        // and toggling the dropdown pill clears the sidebar selection again
+        fireEvent.click(pill);
+        expect(screen.queryByRole("button", { name: "remove browser filter" })).not.toBeInTheDocument();
+    });
+
+    it("app/time filters dim non-matching frames on the timeline (#64)", async () => {
+        renderDay();
+        const input = await screen.findByPlaceholderText(/Search the day/);
+        fireEvent.focus(input);
+        fireEvent.change(input, { target: { value: "after:11:00" } });
+        // After 11:00: frames 8,9,10 remain lit; earlier frames dim (opacity-25).
+        const timeline = screen.getByTestId("filmstrip-timeline");
+        await waitFor(() => expect(timeline.querySelectorAll(".opacity-25").length).toBeGreaterThan(0));
+        fireEvent.change(input, { target: { value: "" } });
+        await waitFor(() => expect(timeline.querySelectorAll(".opacity-25").length).toBe(0));
+    });
+
+    it("compiles the query language in the day box and hands off with an absolute range (#64)", async () => {
+        const { onOpenSearch } = renderDay();
+        const input = await screen.findByPlaceholderText(/Search the day/);
+        fireEvent.focus(input);
+        fireEvent.change(input, { target: { value: "omurice app:browser after:09:00" } });
+        fireEvent.keyDown(input, { key: "Enter" });
+        expect(onOpenSearch).toHaveBeenCalledWith(`omurice app:browser on:${fixtureDay} after:09:00`);
+        expect(screen.queryByTestId("day-suggest")).not.toBeInTheDocument();
+    });
+
+    it("day-scoped kinds prune suggestions (sessions only shows sessions) (#64)", async () => {
+        renderDay();
+        const input = await screen.findByPlaceholderText(/Search the day/);
+        fireEvent.focus(input);
+        fireEvent.change(input, { target: { value: "kind:session omurice" } });
+        const listbox = await screen.findByRole("listbox", { name: "day search suggestions" });
+        expect(listbox).toHaveTextContent("Omurice — Uncle Roger");
+        expect(listbox).not.toHaveTextContent("watch-lane");
+    });
 });

@@ -3,6 +3,7 @@ import type { Frame, Session } from "@/lib/api";
 import { frameImageUrl } from "@/lib/api";
 import { formatTime, formatTimeS } from "@/lib/format";
 import { srcOf } from "@/lib/frames";
+import { matchesDayFrame, matchesDaySession, type DayFilterState } from "@/lib/day-filters";
 import { SourceBadge } from "./frame-meta";
 import {
     assignLanes,
@@ -37,7 +38,7 @@ interface FilmstripProps {
     onSelect: (f: Frame) => void;
     onMediaOpen: (sessions: Session[]) => void;
     hits: Set<number> | null;
-    filterCls: string | null;
+    filters: DayFilterState;
     ppm: number;
     onPpmChange: (ppm: number) => void;
     following: boolean;
@@ -50,7 +51,7 @@ interface HoverState {
     y: number;
 }
 
-export function Filmstrip({ baseUrl, frames, sessions, selected, onSelect, onMediaOpen, hits, filterCls, ppm, onPpmChange, following, onToggleFollow }: FilmstripProps) {
+export function Filmstrip({ baseUrl, frames, sessions, selected, onSelect, onMediaOpen, hits, filters, ppm, onPpmChange, following, onToggleFollow }: FilmstripProps) {
     const axis = useMemo<Span[]>(() => (frames.length > 1 ? buildAxis(frames, ppm) : []), [frames, ppm]);
     const axisW = axisWidth(axis);
 
@@ -296,7 +297,7 @@ export function Filmstrip({ baseUrl, frames, sessions, selected, onSelect, onMed
                             {frames.map((f) => {
                                 const sel = f.id === selected?.id;
                                 const hit = hits?.has(f.id);
-                                const muted = filterCls !== null && f.window_class !== filterCls;
+                                const muted = !matchesDayFrame(filters, f);
                                 return (
                                     <div
                                         key={f.id}
@@ -322,12 +323,19 @@ export function Filmstrip({ baseUrl, frames, sessions, selected, onSelect, onMed
                             const b = Math.max(axisOf(axis, r.end), a + 8);
                             const music = r.player.split(".")[0] === "sidra";
                             const color = playerColor(r.player);
+                            const runSessions = sessionsByRun.get(r) ?? [];
+                            // A run dims when every session in it fails the
+                            // day filters (player/source/time-of-day).
+                            const dimmed = runSessions.length > 0 && runSessions.every((s) => !matchesDaySession(filters, s));
                             return (
                                 <div
                                     key={`${r.player}|${r.title}|${r.start}`}
                                     role="button"
                                     aria-label={`session ${r.title}`}
-                                    className="absolute flex cursor-pointer items-center overflow-hidden rounded-[4px] border transition-[filter] hover:brightness-125"
+                                    className={cn(
+                                        "absolute flex cursor-pointer items-center overflow-hidden rounded-[4px] border transition-[filter] hover:brightness-125",
+                                        dimmed && "opacity-25",
+                                    )}
                                     style={{
                                         left: a,
                                         width: Math.max(b - a, 8),

@@ -13,11 +13,12 @@ interface FrameMetaProps {
     onRunRecap: () => void;
     recapRunning: boolean;
     apps: Array<{ cls: string; count: number; pct: number }>;
-    filterCls: string | null;
-    onFilter: (cls: string | null) => void;
+    selectedApps: string[];
+    onToggleApp: (cls: string) => void;
+    onClearApps: () => void;
 }
 
-export function FrameMeta({ frame, recapResult, onRunRecap, recapRunning, apps, filterCls, onFilter }: FrameMetaProps) {
+export function FrameMeta({ frame, recapResult, onRunRecap, recapRunning, apps, selectedApps, onToggleApp, onClearApps }: FrameMetaProps) {
     const src = srcOf(frame);
     const text = frame.a11y_text || frame.ocr_text || "";
     return (
@@ -88,7 +89,7 @@ export function FrameMeta({ frame, recapResult, onRunRecap, recapRunning, apps, 
                 <button
                     type="button"
                     className="flex items-center gap-2.5 rounded-sm px-2 py-1.5 text-left transition-colors hover:bg-surface-2"
-                    onClick={() => onFilter(null)}
+                    onClick={onClearApps}
                     data-testid="apps-filter-clear"
                 >
                     <span className="w-2 shrink-0 rounded-[3px] bg-border" />
@@ -97,7 +98,7 @@ export function FrameMeta({ frame, recapResult, onRunRecap, recapRunning, apps, 
                     </div>
                 </button>
                 {apps.map((a) => {
-                    const active = filterCls === a.cls;
+                    const active = selectedApps.includes(a.cls);
                     return (
                         <button
                             key={a.cls}
@@ -106,7 +107,7 @@ export function FrameMeta({ frame, recapResult, onRunRecap, recapRunning, apps, 
                                 "flex items-center gap-2.5 rounded-sm px-2 py-1.5 text-left transition-colors hover:bg-surface-2",
                                 active && "bg-surface-2",
                             )}
-                            onClick={() => onFilter(active ? null : a.cls)}
+                            onClick={() => onToggleApp(a.cls)}
                             data-testid={`app-filter-${a.cls}`}
                         >
                             <span className="w-2 shrink-0 rounded-[3px]" style={{ background: clsColor(a.cls) }} />

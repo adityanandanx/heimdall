@@ -3,6 +3,23 @@ import type { Frame, Session } from "@/lib/api";
 import { frameImageUrl } from "@/lib/api";
 import { formatTimeS } from "@/lib/format";
 import { srcOf } from "@/lib/frames";
+import {
+    dayFiltersActive,
+    dayHandoffQuery,
+    dayStateFrom,
+    matchesDayFrame,
+    matchesDaySession,
+    type DayFilterState,
+} from "@/lib/day-filters";
+import {
+    insertToken,
+    parseQuery,
+    removeOpTokens,
+    removeSourceTokens,
+    removeToken,
+    tokenMatch,
+} from "@/lib/query-language";
+import { KINDS, SOURCES } from "@/lib/search-filters";
 import { dayStrOf, frameNear, shiftDay } from "@/lib/timeline";
 import { cn } from "@/lib/utils";
 import { useDayFrames, useDaySessions, useRunPipe, useStatus } from "@/hooks/use-day-browser";
@@ -23,13 +40,14 @@ type Suggestion =
     | { kind: "frame"; frame: Frame; ts: number; title: string; sub: string }
     | { kind: "session"; session: Session; ts: number; title: string; sub: string };
 
+type DayChip = { id: string; label: string };
+
 /** Follow-live poll cadence for today's frames (ms). */
 const FOLLOW_POLL_MS = 15_000;
 
 export function DaySurface({ baseUrl, day, onDayChange, onOpenSearch, seek, onSeekDone }: DaySurfaceProps) {
     const [ppm, setPpm] = useState(14);
     const [selected, setSelected] = useState<Frame | null>(null);
-    const [filterCls, setFilterCls] = useState<string | null>(null);
     const [dayQuery, setDayQuery] = useState("");
     const [followLive, setFollowLive] = useState(false);
     const [mediaPopup, setMediaPopup] = useState<Session[] | null>(null);
@@ -51,6 +69,14 @@ export function DaySurface({ baseUrl, day, onDayChange, onOpenSearch, seek, onSe
     const sessions = sessionsQ.data ?? [];
     const selectedFrame = selected ?? frames[frames.length - 1] ?? null;
 
+    // The box text is the single source of truth for the day's filter tokens
+    // (kind/app/player/source/after/before); state derives from the parse,
+    // exactly like the Search surface (#64). The dropdown widgets, the sidebar
+    // app chips and the timeline dimming all read this one projection.
+    const parsed = useMemo(() => parseQuery(dayQuery), [dayQuery]);
+    const filters = useMemo<DayFilterState>(() => dayStateFrom(parsed), [parsed]);
+    const query = parsed.text;
+
     // Default selection + reply to cross-surface "jump" requests.
     useEffect(() => {
         if (!frames.length) return;
@@ -66,7 +92,7 @@ export function DaySurface({ baseUrl, day, onDayChange, onOpenSearch, seek, onSe
     }, [frames, seek?.nonce]);
 
     const hits = useMemo(() => {
-        const q = dayQuery.trim().toLowerCase();
+        const q = query.trim().toLowerCase();
         if (q.length < 2) return null;
         const ids = new Set<number>();
         for (const f of frames) {
@@ -74,15 +100,16 @@ export function DaySurface({ baseUrl, day, onDayChange, onOpenSearch, seek, onSe
             if (text.includes(q)) ids.add(f.id);
         }
         return ids;
-    }, [dayQuery, frames]);
+    }, [query, frames]);
 
     const suggestions = useMemo(() => {
-        const q = dayQuery.trim().toLowerCase();
+        const q = query.trim().toLowerCase();
         if (q.length < 2) return [];
         const out: Suggestion[] = [];
         const seenTitles = new Set<string>();
         for (const f of frames) {
             if (out.length >= 5) break;
+            if (!matchesDayFrame(filters, f)) continue;
             const hit = frameMatchText(f, q);
             if (!hit) continue;
             out.push({
@@ -95,6 +122,7 @@ export function DaySurface({ baseUrl, day, onDayChange, onOpenSearch, seek, onSe
         }
         for (const s of sessions) {
             if (out.length >= 8) break;
+            if (!matchesDaySession(filters, s)) continue;
             const text = `${s.media_title ?? ""} ${s.transcript ?? ""}`.toLowerCase();
             if (!text.includes(q)) continue;
             const title = s.media_title ?? s.player;
@@ -111,7 +139,7 @@ export function DaySurface({ baseUrl, day, onDayChange, onOpenSearch, seek, onSe
             });
         }
         return out;
-    }, [dayQuery, frames, sessions]);
+    }, [query, filters, frames, sessions]);
 
     useEffect(() => setActiveSugg(-1), [dayQuery]);
 
@@ -122,18 +150,60 @@ export function DaySurface({ baseUrl, day, onDayChange, onOpenSearch, seek, onSe
             if (s.kind === "frame") setSelected(s.frame);
             else setSelected(frameNear(frames, s.ts));
             setDayQuery("");
+            setSuggestFocused(false);
             searchRef.current?.blur();
         },
         [frames],
     );
 
+    // Widget ↓ text: the box is authoritative, so widget changes rewrite the
+    // tokens (single-select dims replace the token, multi-select toggles).
+    const setDayDim = (op: "kind" | "source" | "after" | "before", value: string) => {
+        const base = op === "source" ? removeSourceTokens(dayQuery) : removeOpTokens(dayQuery, op);
+        setDayQuery(value === "" || value === "any" || value === "all" ? base : insertToken(base, op, value));
+    };
+    const toggleDayValue = (op: "app" | "player", value: string) => {
+        const match = parsed.tokens.find((t) => tokenMatch(t, op, value) && !t.negated);
+        if (!match) {
+            setDayQuery(insertToken(dayQuery, op, value));
+        } else if (match.value === value) {
+            setDayQuery(removeToken(dayQuery, op, value));
+        } else {
+            // Token typed with different casing — replace, don't invert.
+            setDayQuery(insertToken(removeToken(dayQuery, op, match.value), op, value));
+        }
+    };
+
     const submitDaySearch = useCallback(() => {
-        const q = dayQuery.trim();
-        if (q.length < 2) return;
+        const q = dayHandoffQuery(filters, query, day);
+        if (!q || (query.trim().length < 2 && !dayFiltersActive(filters))) return;
         setDayQuery("");
+        setSuggestFocused(false);
         searchRef.current?.blur();
         onOpenSearch(q);
-    }, [dayQuery, onOpenSearch]);
+    }, [filters, query, day, onOpenSearch]);
+
+    const chips = useMemo<DayChip[]>(() => {
+        const out: DayChip[] = [];
+        const kindLabel = KINDS.find((k) => k.id === filters.kind)?.label;
+        const sourceLabel = SOURCES.find((s) => s.id === filters.source)?.label;
+        if (filters.kind !== "all" && kindLabel) out.push({ id: "kind", label: kindLabel });
+        if (filters.source !== "any" && sourceLabel) out.push({ id: "source", label: sourceLabel });
+        for (const app of filters.apps) out.push({ id: `app:${app}`, label: app });
+        for (const player of filters.players) out.push({ id: `player:${player}`, label: player });
+        if (filters.after) out.push({ id: "after", label: `after ${filters.after}` });
+        if (filters.before) out.push({ id: "before", label: `before ${filters.before}` });
+        return out;
+    }, [filters]);
+
+    const removeChip = (id: string) => {
+        if (id === "kind") setDayQuery(removeOpTokens(dayQuery, "kind"));
+        else if (id === "source") setDayQuery(removeSourceTokens(dayQuery));
+        else if (id === "after") setDayQuery(removeOpTokens(dayQuery, "after"));
+        else if (id === "before") setDayQuery(removeOpTokens(dayQuery, "before"));
+        else if (id.startsWith("app:")) setDayQuery(removeToken(dayQuery, "app", id.slice(4)));
+        else if (id.startsWith("player:")) setDayQuery(removeToken(dayQuery, "player", id.slice(7)));
+    };
 
     const step = useCallback(
         (delta: number) => {
@@ -178,6 +248,11 @@ export function DaySurface({ baseUrl, day, onDayChange, onOpenSearch, seek, onSe
             .map(([cls, count]) => ({ cls, count, pct: (count / total) * 100 }))
             .sort((a, b) => b.count - a.count);
     }, [frames]);
+
+    const players = useMemo(
+        () => [...new Set(sessions.map((s) => s.player))].sort(),
+        [sessions],
+    );
 
     const caption = selectedFrame;
 
@@ -275,50 +350,173 @@ export function DaySurface({ baseUrl, day, onDayChange, onOpenSearch, seek, onSe
                             {hits.size}
                         </span>
                     )}
-                    {suggestFocused && suggestions.length > 0 && (
+                    {suggestFocused && (
                         <div
-                            className="absolute top-full right-0 left-0 z-40 mt-1 overflow-hidden rounded-md border border-line bg-surface p-1 shadow-[var(--e2)]"
-                            role="listbox"
-                            aria-label="day search suggestions"
+                            className="absolute top-full right-0 left-0 z-40 mt-1 overflow-hidden rounded-md border border-line bg-surface shadow-[var(--e2)]"
                             data-testid="day-suggest"
                         >
-                            {suggestions.map((s, i) => (
-                                <button
-                                    key={`${s.kind}-${i}`}
-                                    type="button"
-                                    role="option"
-                                    aria-selected={i === activeSugg}
-                                    onMouseEnter={() => setActiveSugg(i)}
-                                    onClick={() => goToSuggestion(s)}
-                                    className={cn(
-                                        "flex w-full items-center gap-2.5 rounded-sm px-2 py-1.5 text-left transition-colors",
-                                        i === activeSugg ? "bg-primary/10" : "hover:bg-surface-2",
-                                    )}
+                            {/* Filter widgets zone (#64): day-scoped kind/app/
+                                player/source + time-of-day instead of a range. */}
+                            <div className="flex flex-wrap items-center gap-1.5 border-b border-line px-2 py-2">
+                                <div
+                                    role="group"
+                                    aria-label="day kind filter"
+                                    className="flex overflow-hidden rounded-full border border-line"
                                 >
-                                    {s.kind === "frame" ? (
-                                        <img
-                                            src={frameImageUrl(baseUrl, s.frame.id)}
-                                            alt=""
-                                            className="h-8 w-12 shrink-0 rounded-[3px] border border-line bg-surface-2 object-cover"
-                                        />
-                                    ) : (
-                                        <span className="flex size-8 shrink-0 items-center justify-center rounded-[3px] border border-line bg-surface-2">
-                                            <span className="font-mono text-[11px] text-dim">▶</span>
-                                        </span>
-                                    )}
-                                    <span className="min-w-0 flex-1">
-                                        <span className="flex items-center gap-1.5 text-xs">
-                                            <b className="min-w-0 truncate font-semibold text-foreground">
-                                                {s.title}
-                                            </b>
-                                            <span className="ml-auto shrink-0 font-mono text-[10px] text-faint">
-                                                {formatTimeS(s.ts)}
+                                    {KINDS.map((k) => (
+                                        <button
+                                            key={k.id}
+                                            type="button"
+                                            aria-pressed={filters.kind === k.id}
+                                            onClick={() => setDayDim("kind", k.id)}
+                                            className={cn(
+                                                "px-2 py-0.5 text-[10px] transition-colors",
+                                                filters.kind === k.id
+                                                    ? "bg-primary/15 text-primary"
+                                                    : "text-dim hover:text-foreground",
+                                            )}
+                                        >
+                                            {k.label}
+                                        </button>
+                                    ))}
+                                </div>
+                                {apps.map((a) => (
+                                    <button
+                                        key={a.cls}
+                                        type="button"
+                                        aria-pressed={filters.apps.includes(a.cls)}
+                                        onClick={() => toggleDayValue("app", a.cls)}
+                                        className={cn(
+                                            "rounded-full border px-2 py-0.5 text-[10px] transition-colors",
+                                            filters.apps.includes(a.cls)
+                                                ? "border-primary/50 bg-primary/15 text-primary"
+                                                : "border-line text-dim hover:border-primary/50 hover:text-foreground",
+                                        )}
+                                    >
+                                        {a.cls}
+                                    </button>
+                                ))}
+                                {players.map((p) => (
+                                    <button
+                                        key={p}
+                                        type="button"
+                                        aria-pressed={filters.players.includes(p)}
+                                        onClick={() => toggleDayValue("player", p)}
+                                        className={cn(
+                                            "rounded-full border px-2 py-0.5 text-[10px] transition-colors",
+                                            filters.players.includes(p)
+                                                ? "border-primary/50 bg-primary/15 text-primary"
+                                                : "border-line text-dim hover:border-primary/50 hover:text-foreground",
+                                        )}
+                                    >
+                                        {p}
+                                    </button>
+                                ))}
+                                <select
+                                    aria-label="day source filter"
+                                    value={filters.source}
+                                    onChange={(e) => setDayDim("source", e.currentTarget.value)}
+                                    className="rounded-md border border-line bg-surface px-1.5 py-0.5 text-[10px] text-dim outline-none focus:border-primary"
+                                >
+                                    {SOURCES.map((s) => (
+                                        <option key={s.id} value={s.id}>
+                                            {s.label}
+                                        </option>
+                                    ))}
+                                </select>
+                                <label className="flex items-center gap-1 text-[10px] text-faint">
+                                    after
+                                    <input
+                                        type="time"
+                                        aria-label="after time"
+                                        value={filters.after}
+                                        onChange={(e) => setDayDim("after", e.currentTarget.value)}
+                                        className="rounded-md border border-line bg-surface px-1 py-0.5 text-[10px] text-dim outline-none focus:border-primary [color-scheme:dark]"
+                                    />
+                                </label>
+                                <label className="flex items-center gap-1 text-[10px] text-faint">
+                                    before
+                                    <input
+                                        type="time"
+                                        aria-label="before time"
+                                        value={filters.before}
+                                        onChange={(e) => setDayDim("before", e.currentTarget.value)}
+                                        className="rounded-md border border-line bg-surface px-1 py-0.5 text-[10px] text-dim outline-none focus:border-primary [color-scheme:dark]"
+                                    />
+                                </label>
+                            </div>
+
+                            {/* Active-filter chips row (#64) */}
+                            {chips.length > 0 && (
+                                <div
+                                    className="flex flex-wrap items-center gap-1.5 border-b border-line px-2 py-1.5"
+                                    aria-label="day active filters"
+                                >
+                                    {chips.map((chip) => (
+                                        <button
+                                            key={chip.id}
+                                            type="button"
+                                            onClick={() => removeChip(chip.id)}
+                                            aria-label={`remove ${chip.label} filter`}
+                                            className="flex items-center gap-1 rounded-full border border-primary/30 bg-primary/10 px-2 py-0.5 text-[10px] text-primary transition-colors hover:bg-primary/20"
+                                        >
+                                            {chip.label}
+                                            <span aria-hidden>×</span>
+                                        </button>
+                                    ))}
+                                </div>
+                            )}
+
+                            {/* Suggestions: internal max-height scroll (#58). */}
+                            <div
+                                className="max-h-72 overflow-y-auto p-1"
+                                role="listbox"
+                                aria-label="day search suggestions"
+                            >
+                                {suggestions.length === 0 ? (
+                                    <p className="px-2 py-1.5 text-[10px] text-faint">
+                                        {query.trim().length >= 2 ? "no matches" : "type to search the day"}
+                                    </p>
+                                ) : (
+                                    suggestions.map((s, i) => (
+                                        <button
+                                            key={`${s.kind}-${i}`}
+                                            type="button"
+                                            role="option"
+                                            aria-selected={i === activeSugg}
+                                            onMouseEnter={() => setActiveSugg(i)}
+                                            onClick={() => goToSuggestion(s)}
+                                            className={cn(
+                                                "flex w-full items-center gap-2.5 rounded-sm px-2 py-1.5 text-left transition-colors",
+                                                i === activeSugg ? "bg-primary/10" : "hover:bg-surface-2",
+                                            )}
+                                        >
+                                            {s.kind === "frame" ? (
+                                                <img
+                                                    src={frameImageUrl(baseUrl, s.frame.id)}
+                                                    alt=""
+                                                    className="h-8 w-12 shrink-0 rounded-[3px] border border-line bg-surface-2 object-cover"
+                                                />
+                                            ) : (
+                                                <span className="flex size-8 shrink-0 items-center justify-center rounded-[3px] border border-line bg-surface-2">
+                                                    <span className="font-mono text-[11px] text-dim">▶</span>
+                                                </span>
+                                            )}
+                                            <span className="min-w-0 flex-1">
+                                                <span className="flex items-center gap-1.5 text-xs">
+                                                    <b className="min-w-0 truncate font-semibold text-foreground">
+                                                        {s.title}
+                                                    </b>
+                                                    <span className="ml-auto shrink-0 font-mono text-[10px] text-faint">
+                                                        {formatTimeS(s.ts)}
+                                                    </span>
+                                                </span>
+                                                <span className="block truncate text-[10px] text-faint">{s.sub}</span>
                                             </span>
-                                        </span>
-                                        <span className="block truncate text-[10px] text-faint">{s.sub}</span>
-                                    </span>
-                                </button>
-                            ))}
+                                        </button>
+                                    ))
+                                )}
+                            </div>
                         </div>
                     )}
                 </div>
@@ -390,7 +588,7 @@ export function DaySurface({ baseUrl, day, onDayChange, onOpenSearch, seek, onSe
                         }}
                         onMediaOpen={setMediaPopup}
                         hits={hits}
-                        filterCls={filterCls}
+                        filters={filters}
                         ppm={ppm}
                         onPpmChange={setPpm}
                         following={followLive}
@@ -411,8 +609,9 @@ export function DaySurface({ baseUrl, day, onDayChange, onOpenSearch, seek, onSe
                             onRunRecap={() => recap.run("day-recap")}
                             recapRunning={recap.isRunning}
                             apps={apps}
-                            filterCls={filterCls}
-                            onFilter={setFilterCls}
+                            selectedApps={filters.apps}
+                            onToggleApp={(cls) => toggleDayValue("app", cls)}
+                            onClearApps={() => setDayQuery(removeOpTokens(dayQuery, "app"))}
                         />
                     )}
                 </div>
