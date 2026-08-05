@@ -6,3 +6,4 @@ __pycache__/
 prototypes/
 
 extensions/heimdall-messenger/key.pem
+bench/
