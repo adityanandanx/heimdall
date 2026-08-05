@@ -59,6 +59,7 @@ export function Filmstrip({ baseUrl, frames, sessions, selected, onSelect, onMed
     const anchorKeepRef = useRef(-1);
     const hoverIdRef = useRef<number | null>(null);
     const [hov, setHov] = useState<HoverState | null>(null);
+    const [followLive, setFollowLive] = useState(false);
     const [viewW, setViewW] = useState(0);
 
     // Track the scroll viewport width so the trailing pad lets the last
@@ -73,6 +74,15 @@ export function Filmstrip({ baseUrl, frames, sessions, selected, onSelect, onMed
         ro.observe(el);
         return () => ro.disconnect();
     }, []);
+
+    // When following live, ride the newest capture by snapping to the end
+    // of the timeline whenever new frames come in.
+    useLayoutEffect(() => {
+        if (!followLive) return;
+        const el = scrollRef.current;
+        if (el) el.scrollLeft = scrollLimit();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [frames, followLive]);
 
     const runs = useMemo(() => buildRuns(sessions), [sessions]);
     const laneRuns = useMemo(() => assignLanes(runs), [runs]);
@@ -168,7 +178,7 @@ export function Filmstrip({ baseUrl, frames, sessions, selected, onSelect, onMed
     const dayEnd = frames[frames.length - 1]?.ts ?? null;
 
     return (
-        <div className="shrink-0 border-t border-line bg-surface px-5 pt-3.5 pb-4">
+        <div className="shrink-0 border-t border-line bg-surface px-5 pt-3.5 pb-4 select-none">
             <div className="mb-2.5 flex flex-wrap items-center gap-2.5">
                 <span className="font-mono text-xs text-dim">
                     {dayStart ? formatTime(dayStart) : "—"}
@@ -183,6 +193,26 @@ export function Filmstrip({ baseUrl, frames, sessions, selected, onSelect, onMed
                         ▮▮ {players} player{players > 1 ? "s" : ""}
                     </span>
                 )}
+                <button
+                    type="button"
+                    onClick={() => setFollowLive((v) => !v)}
+                    aria-pressed={followLive}
+                    data-testid="follow-live"
+                    className={cn(
+                        "flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[10px] transition-colors",
+                        followLive
+                            ? "border-primary/60 text-primary"
+                            : "border-line text-dim hover:border-primary/60 hover:text-foreground",
+                    )}
+                >
+                    <span
+                        className={cn(
+                            "size-1.5 rounded-full",
+                            followLive ? "bg-primary shadow-[0_0_6px_var(--primary)]" : "bg-dim",
+                        )}
+                    />
+                    follow
+                </button>
             </div>
 
             <div
@@ -192,11 +222,12 @@ export function Filmstrip({ baseUrl, frames, sessions, selected, onSelect, onMed
                 <div className="relative" style={{ width: contentW + padEnd }}>
                     <div
                         ref={timelineRef}
-                        className="relative cursor-pointer touch-none overflow-hidden rounded-md border border-line bg-surface-2 select-none"
+                        className="relative cursor-pointer touch-none overflow-hidden rounded-md bg-[color-mix(in_srgb,var(--background)_85%,var(--surface-2))] select-none"
                         style={{ width: contentW, height: timelineH }}
                         data-testid="filmstrip-timeline"
                         onPointerDown={(e) => {
                             if (e.button !== 0) return;
+                            e.preventDefault();
                             draggingRef.current = true;
                             setHov(null);
                             timelineRef.current?.setPointerCapture(e.pointerId);

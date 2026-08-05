@@ -141,9 +141,13 @@ export function DaySurface({ baseUrl, day, onDayChange, onOpenSearch, seek, onSe
                 target &&
                 (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable);
             if (typing) return;
-            if (e.key === "ArrowRight") step(e.shiftKey ? 3 : 1);
-            else if (e.key === "ArrowLeft") step(e.shiftKey ? -3 : -1);
-            else if (e.key.toLowerCase() === "g") step(frames.length);
+            if (e.key === "ArrowRight") {
+                e.preventDefault();
+                step(e.shiftKey ? 3 : 1);
+            } else if (e.key === "ArrowLeft") {
+                e.preventDefault();
+                step(e.shiftKey ? -3 : -1);
+            } else if (e.key.toLowerCase() === "g") step(frames.length);
             else if (e.key.toLowerCase() === "h") step(-frames.length);
             else if (e.key === "/") {
                 e.preventDefault();

@@ -163,6 +163,17 @@ describe("DaySurface", () => {
         await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     });
 
+    it("toggles the follow-live button", async () => {
+        renderDay();
+        await screen.findAllByText(/watch-lane\.tsx/);
+        const btn = screen.getByTestId("follow-live");
+        expect(btn).toHaveAttribute("aria-pressed", "false");
+        fireEvent.click(btn);
+        expect(btn).toHaveAttribute("aria-pressed", "true");
+        fireEvent.click(btn);
+        expect(btn).toHaveAttribute("aria-pressed", "false");
+    });
+
     it("runs the day recap and renders its markdown", async () => {
         renderDay();
         await screen.findByText("⟳ synthesize");
