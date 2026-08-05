@@ -727,72 +727,76 @@ class Database:
 
 
     def facet_counts(self, query: str | None, *, kind: str | None = None,
-                         window_class: str | None = None,
-                         player: str | None = None,
-                         start: int | None = None,
-                         end: int | None = None) -> dict:
-            """Top apps (window classes) and media players with match counts, for
-            filter dropdowns (#57).
-    
-            `query=None` browses (plain grouped scans). Each dimension is computed
-            excluding its own filter — `window_class` never narrows the apps facet
-            and `player` never narrows the players facet — so the dropdowns always
-            show the full option set for the current scope. `kind` scopes the
-            surfaces: ``frame`` → apps only, ``session`` → players only, else both.
-            Raises sqlite3.OperationalError on an invalid FTS5 MATCH.
-            """
-            self.query_count += 1
-            apps: list[dict] = []
-            players: list[dict] = []
-            with self._lock, self.conn() as conn:
-                if kind in (None, "frame"):
-                    clauses, params = [], []
-                    source = "frames_fts JOIN frames f ON f.id = frames_fts.rowid"
-                    if query:
-                        clauses.append("frames_fts MATCH ?")
-                        params.append(query)
-                    clauses.append("f.window_class IS NOT NULL AND f.window_class <> ''")
-                    if start is not None:
-                        clauses.append("f.ts >= ?")
-                        params.append(start)
-                    if end is not None:
-                        clauses.append("f.ts <= ?")
-                        params.append(end)
-                    where = f" WHERE {' AND '.join(clauses)}"
-                    # window_class is deliberately absent from WHERE: the app facet
-                    # ignores the selected app filter (classic faceting).
-                    rows = conn.execute(
-                        "SELECT f.window_class AS value, COUNT(*) AS count"
-                        f" FROM {source}{where}"
-                        " GROUP BY f.window_class"
-                        " ORDER BY count DESC, f.window_class ASC LIMIT 25",
-                        params,
-                    ).fetchall()
-                    apps = [dict(r) for r in rows]
-                if kind in (None, "session"):
-                    clauses, params = [], []
-                    source = ("watch_sessions_fts JOIN watch_sessions s"
-                              " ON s.id = watch_sessions_fts.rowid")
-                    if query:
-                        clauses.append("watch_sessions_fts MATCH ?")
-                        params.append(query)
-                    if start is not None:
-                        clauses.append("s.ts_start >= ?")
-                        params.append(start)
-                    if end is not None:
-                        clauses.append("s.ts_start <= ?")
-                        params.append(end)
-                    where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
-                    # player is deliberately absent: own-filter exclusion.
-                    rows = conn.execute(
-                        "SELECT s.player AS value, COUNT(*) AS count"
-                        f" FROM {source}{where}"
-                        " GROUP BY s.player"
-                        " ORDER BY count DESC, s.player ASC LIMIT 25",
-                        params,
-                    ).fetchall()
-                    players = [dict(r) for r in rows]
-                return {"apps": apps, "players": players}
+                     window_class: str | None = None,
+                     player: str | None = None,
+                     start: int | None = None,
+                     end: int | None = None) -> dict:
+        """Top apps (window classes) and media players with match counts, for
+        filter dropdowns (#57).
+
+        `query=None` browses (plain grouped scans). `kind` scopes the surfaces:
+        ``frame`` → apps only, ``session`` → players only, else both. Raises
+        sqlite3.OperationalError on an invalid FTS5 MATCH.
+
+        Facets are computed in the current scope minus each dimension's own
+        filter (classic faceting): `window_class` never narrows the apps facet
+        and `player` never narrows the players facet. The two filters live on
+        disjoint surfaces — sessions have no window_class, frames have no
+        player — so no cross-narrowing is possible; the selection params exist
+        purely so callers can state what is selected without shrinking counts.
+        """
+        self.query_count += 1
+        apps: list[dict] = []
+        players: list[dict] = []
+        with self._lock, self.conn() as conn:
+            if kind in (None, "frame"):
+                clauses, params = [], []
+                source = "frames_fts JOIN frames f ON f.id = frames_fts.rowid"
+                if query:
+                    clauses.append("frames_fts MATCH ?")
+                    params.append(query)
+                clauses.append("f.window_class IS NOT NULL AND f.window_class <> ''")
+                if start is not None:
+                    clauses.append("f.ts >= ?")
+                    params.append(start)
+                if end is not None:
+                    clauses.append("f.ts <= ?")
+                    params.append(end)
+                where = f" WHERE {' AND '.join(clauses)}"
+                # window_class is deliberately absent from WHERE: the app facet
+                # ignores the selected app filter (classic faceting).
+                rows = conn.execute(
+                    "SELECT f.window_class AS value, COUNT(*) AS count"
+                    f" FROM {source}{where}"
+                    " GROUP BY f.window_class"
+                    " ORDER BY count DESC, f.window_class ASC LIMIT 25",
+                    params,
+                ).fetchall()
+                apps = [dict(r) for r in rows]
+            if kind in (None, "session"):
+                clauses, params = [], []
+                source = ("watch_sessions_fts JOIN watch_sessions s"
+                          " ON s.id = watch_sessions_fts.rowid")
+                if query:
+                    clauses.append("watch_sessions_fts MATCH ?")
+                    params.append(query)
+                if start is not None:
+                    clauses.append("s.ts_start >= ?")
+                    params.append(start)
+                if end is not None:
+                    clauses.append("s.ts_start <= ?")
+                    params.append(end)
+                where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+                # player is deliberately absent: own-filter exclusion.
+                rows = conn.execute(
+                    "SELECT s.player AS value, COUNT(*) AS count"
+                    f" FROM {source}{where}"
+                    " GROUP BY s.player"
+                    " ORDER BY count DESC, s.player ASC LIMIT 25",
+                    params,
+                ).fetchall()
+                players = [dict(r) for r in rows]
+            return {"apps": apps, "players": players}
 
 
 def _session_item(row: sqlite3.Row) -> dict:

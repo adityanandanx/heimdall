@@ -387,7 +387,13 @@ def test_search_facets_kind_scopes_surfaces(api_client: TestClient, db):
 
 
 def test_search_facets_excludes_own_filter(api_client: TestClient, db):
-    """Classic faceting: a selected app/player never narrows its own facet."""
+    """Classic faceting: a selected app/player never narrows its own facet.
+
+    window_class/player are stated selections, not filters: sessions have no
+    window_class and frames have no player (disjoint surfaces), so exclusion
+    is the only effect they can have. Both dimensions must come back
+    identical to the unfiltered facet set.
+    """
     start_ms, _ = day_bounds(FIXTURE_DAY)
     _insert_session(db, player="vlc", wall_ms=start_ms + 10 * 60_000)
     _insert_session(db, player="mpv", wall_ms=start_ms + 20 * 60_000)
@@ -408,6 +414,15 @@ def test_search_facets_time_range(api_client: TestClient):
     }).json()
     assert [a["value"] for a in body["apps"]] == ["firefox", "code", "kitty", "mpv"]
     assert [a["count"] for a in body["apps"]] == [2, 1, 1, 1]  # @35/@80, @65, @90, @50
+    end_only = api_client.get("/search/facets", params={
+        "end": ts_to_iso(start_ms + 30 * 60_000),
+    }).json()
+    assert [a["value"] for a in end_only["apps"]] == ["code", "firefox", "kitty"]  # @5, @20, @0
+    assert [a["count"] for a in end_only["apps"]] == [1, 1, 1]
+    assert api_client.get("/search/facets", params={
+        "start": ts_to_iso(start_ms + 30 * 60_000),
+        "end": ts_to_iso(start_ms + 60 * 60_000),
+    }).json()["apps"] == [{"value": "firefox", "count": 1}, {"value": "mpv", "count": 1}]
 
 
 def test_search_facets_empty_scope_and_invalid_q(api_client: TestClient):
