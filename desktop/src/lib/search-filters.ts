@@ -1,3 +1,4 @@
+import type { SearchItem } from "@/lib/api";
 import { dayBoundsISO, localISO, shiftDay } from "@/lib/timeline";
 
 export type KindFilter = "all" | "frame" | "session";
@@ -182,4 +183,23 @@ export function withChipRemoved(f: SearchFilters, id: ChipId): SearchFilters {
 /** Toggle one value in a multi-select list (facet dropdowns). */
 export function toggleValue(list: string[], value: string): string[] {
     return list.includes(value) ? list.filter((v) => v !== value) : [...list, value];
+}
+
+/** Apply the client-side app/player membership filters to a result page.
+ *
+ * Frames match apps on window_class; sessions match players on player —
+ * /search's window_class/player params are single-valued, so the facets
+ * endpoint counts the full scope while these narrow the results (#59).
+ */
+export function filterItems(f: SearchFilters, items: SearchItem[]): SearchItem[] {
+    let result = items;
+    if (hasApps(f)) {
+        // only frames carry a window_class — sessions pass through
+        result = result.filter((i) => i.kind === "session" || f.apps.includes(i.window_class));
+    }
+    if (hasPlayers(f)) {
+        // only sessions carry a player — frames pass through
+        result = result.filter((i) => i.kind === "frame" || f.players.includes(i.player ?? ""));
+    }
+    return result;
 }

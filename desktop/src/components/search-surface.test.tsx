@@ -1,7 +1,7 @@
 import { fireEvent, screen, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SearchSurface } from "./search-surface";
-import { base, searchRequestUrls } from "@/test/msw/handlers";
+import { base, searchRequestUrls, setSearchResponseDelay } from "@/test/msw/handlers";
 import { renderWithQuery } from "@/test/render";
 import { dayBoundsISO, localISO } from "@/lib/timeline";
 
@@ -14,7 +14,10 @@ function renderSearch() {
 describe("SearchSurface", () => {
     beforeEach(() => {
         searchRequestUrls.length = 0;
+        setSearchResponseDelay(0);
     });
+
+    afterEach(() => setSearchResponseDelay(0));
 
     it("autofocuses the query input when opened", async () => {
         renderSearch();
@@ -197,6 +200,9 @@ describe("SearchSurface", () => {
         expect(await screen.findByText("Heimdall docs")).toBeInTheDocument();
         expect(screen.getByText("PNG spec")).toBeInTheDocument();
         expect(screen.queryByText("htop")).not.toBeInTheDocument(); // terminal frame filtered out
+        // the app filter only narrows frames — sessions survive it
+        expect(screen.getByText("Omurice — Uncle Roger")).toBeInTheDocument();
+        expect(screen.getByText("Rust borrow checker deep dive")).toBeInTheDocument();
     });
 
     it("filters sessions by selected players, leaving frames alone", async () => {
@@ -218,6 +224,16 @@ describe("SearchSurface", () => {
         fireEvent.click(screen.getByRole("button", { name: /^player/ }));
         expect(await screen.findByRole("checkbox", { name: "player sidra" })).toBeInTheDocument();
         expect(screen.queryByRole("checkbox", { name: "player vlc" })).not.toBeInTheDocument();
+    });
+
+    it("refreshes facet counts as the date scope changes", async () => {
+        renderSearch();
+        fireEvent.change(screen.getByLabelText("date range preset"), { target: { value: "yesterday" } });
+        fireEvent.click(screen.getByRole("button", { name: /^app/ }));
+        expect(await screen.findByText("No apps.")).toBeInTheDocument(); // fixtures are all today
+        fireEvent.change(screen.getByLabelText("date range preset"), { target: { value: "today" } });
+        expect(await screen.findByRole("checkbox", { name: "app browser" })).toBeInTheDocument();
+        expect(screen.getByRole("checkbox", { name: "app terminal" })).toBeInTheDocument();
     });
 
     it("renders an empty state for empty facet lists", async () => {
@@ -253,6 +269,20 @@ describe("SearchSurface", () => {
         fireEvent.click(screen.getByRole("button", { name: /^app/ }));
         expect(await screen.findByText("No apps.")).toBeInTheDocument();
         expect(screen.queryByRole("checkbox", { name: "app browser" })).not.toBeInTheDocument();
+        expect(new URL(searchRequestUrls[searchRequestUrls.length - 1]).searchParams.get("q"))
+            .toBe("zzzznothing");
+    });
+
+    it("ignores a late response for an outdated scope", async () => {
+        setSearchResponseDelay(300); // hold the first response in flight
+        renderSearch();
+        fireEvent.change(screen.getByLabelText("search query"), { target: { value: "roger" } });
+        await waitFor(() => expect(searchRequestUrls.length).toBe(1)); // "roger" is in flight
+        fireEvent.change(screen.getByLabelText("search query"), { target: { value: "zzzznothing" } });
+        expect(await screen.findByText("No matches.")).toBeInTheDocument();
+        expect(screen.queryByText("Omurice — Uncle Roger")).not.toBeInTheDocument();
+        fireEvent.click(screen.getByRole("button", { name: /^app/ }));
+        expect(await screen.findByText("No apps.")).toBeInTheDocument();
         expect(new URL(searchRequestUrls[searchRequestUrls.length - 1]).searchParams.get("q"))
             .toBe("zzzznothing");
     });

@@ -210,6 +210,13 @@ export const searchRequestUrls: string[] = [];
 /** Every /search/facets request the UI made this session, for tests. */
 export const searchFacetsRequestUrls: string[] = [];
 
+/** Delay applied to /search responses, so tests can exercise in-flight races. */
+let searchResponseDelayMs = 0;
+
+export function setSearchResponseDelay(ms: number) {
+    searchResponseDelayMs = ms;
+}
+
 export const pipesPayload = {
     "day-recap": {
         pipe: "day-recap",
@@ -267,7 +274,10 @@ export const handlers = [
         if (end) items = items.filter((s) => s.ts_start < end);
         return HttpResponse.json({ total: items.length, items });
     }),
-    http.get(`${base}/search`, ({ request }) => {
+    http.get(`${base}/search`, async ({ request }) => {
+        if (searchResponseDelayMs > 0) {
+            await new Promise((resolve) => setTimeout(resolve, searchResponseDelayMs));
+        }
         const url = new URL(request.url);
         searchRequestUrls.push(request.url);
         const q = url.searchParams.get("q")?.toLowerCase() ?? "";
@@ -300,7 +310,7 @@ export const handlers = [
             (s.snippet + s.window_class + (s.window_title ?? "")).toLowerCase().includes(q) &&
             (!start || s.ts >= start) &&
             (!end || s.ts <= end);
-        const facet = (rows: SearchFixture[], key: (s: SearchFixture) => string) => {
+        const topFacets = (rows: SearchFixture[], key: (s: SearchFixture) => string) => {
             const counts = new Map<string, number>();
             for (const row of rows) {
                 const value = key(row);
@@ -313,8 +323,8 @@ export const handlers = [
         };
         const scoped = searchFixtures.filter(inScope);
         return HttpResponse.json({
-            apps: facet(scoped.filter((s) => s.kind === "frame"), (s) => s.window_class),
-            players: facet(scoped.filter((s) => s.kind === "session"), (s) => s.player ?? s.window_class),
+            apps: topFacets(scoped.filter((s) => s.kind === "frame"), (s) => s.window_class),
+            players: topFacets(scoped.filter((s) => s.kind === "session"), (s) => s.player ?? s.window_class),
         });
     }),
     http.post(`${base}/pipes/run/:name`, ({ params }) => {

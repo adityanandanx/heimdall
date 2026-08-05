@@ -8,6 +8,7 @@ import {
     activeChips,
     compileSearchParams,
     DEFAULT_FILTERS,
+    filterItems,
     KINDS,
     PRESETS,
     searchActive,
@@ -66,23 +67,11 @@ export function SearchSurface({ baseUrl, focusNonce, seed, onPick }: SearchSurfa
     // Same gate the fetch hook uses (on raw state, so clearing filters hides
     // stale results instantly rather than after the debounce).
     const showResults = active;
-    // /search's window_class/player params are single-valued, so the
-    // multi-select app/player filters apply client-side (#59).
-    const filtered = useMemo(() => {
-        if (!data) return data;
-        let items = data;
-        if (filters.apps.length > 0) {
-            items = items.filter((i) => filters.apps.includes(i.window_class));
-        }
-        if (filters.players.length > 0) {
-            items = items.filter((i) =>
-                i.kind === "session"
-                    ? filters.players.includes(i.player ?? "")
-                    : true,
-            );
-        }
-        return items;
-    }, [data, filters.apps, filters.players]);
+    // Client-side app/player membership (the API params are single-valued).
+    const filtered = useMemo(
+        () => (data ? filterItems(filters, data) : data),
+        [data, filters],
+    );
 
     return (
         <div className="flex h-full flex-col gap-4 overflow-y-auto p-7">

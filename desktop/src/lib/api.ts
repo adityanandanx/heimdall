@@ -88,7 +88,7 @@ export interface SearchItem {
     snippet: string;
     score: number;
     kind: "frame" | "session";
-    player?: string | null;
+    player?: string;
 }
 
 export interface PipeRunResult {
