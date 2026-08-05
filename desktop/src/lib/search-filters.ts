@@ -4,6 +4,7 @@ import { dayBoundsISO, localISO, shiftDay } from "@/lib/timeline";
 export type KindFilter = "all" | "frame" | "session";
 export type SourceFilter = "any" | "a11y" | "ocr" | "transcript";
 export type DatePreset = "all" | "today" | "yesterday" | "last7" | "thisMonth";
+export type FullscreenFilter = "any" | "yes" | "no";
 
 /** All search filters in one state shape; compiled into /search params (#58). */
 export interface SearchFilters {
@@ -18,6 +19,10 @@ export interface SearchFilters {
      * client-side while the facets endpoint counts the full scope. */
     apps: string[];
     players: string[];
+    /** Frame attributes (T5 tokens; widgets land in #63). */
+    workspace: string;
+    monitor: string;
+    fullscreen: FullscreenFilter;
 }
 
 export const DEFAULT_FILTERS: SearchFilters = {
@@ -28,6 +33,9 @@ export const DEFAULT_FILTERS: SearchFilters = {
     source: "any",
     apps: [],
     players: [],
+    workspace: "",
+    monitor: "",
+    fullscreen: "any",
 };
 
 export const KINDS: Array<{ id: KindFilter; label: string }> = [
@@ -71,8 +79,29 @@ export function hasDate(f: SearchFilters): boolean {
     return f.preset !== "all" || f.start !== "" || f.end !== "";
 }
 
+export function hasWorkspace(f: SearchFilters): boolean {
+    return f.workspace !== "";
+}
+
+export function hasMonitor(f: SearchFilters): boolean {
+    return f.monitor !== "";
+}
+
+export function hasFullscreen(f: SearchFilters): boolean {
+    return f.fullscreen !== "any";
+}
+
 export function isDefaultFilters(f: SearchFilters): boolean {
-    return !hasKind(f) && !hasSource(f) && !hasApps(f) && !hasPlayers(f) && !hasDate(f);
+    return (
+        !hasKind(f) &&
+        !hasSource(f) &&
+        !hasApps(f) &&
+        !hasPlayers(f) &&
+        !hasDate(f) &&
+        !hasWorkspace(f) &&
+        !hasMonitor(f) &&
+        !hasFullscreen(f)
+    );
 }
 
 /** Is a search scope active (text ready, or any filter set)? The single gate
@@ -120,6 +149,9 @@ export function compileSearchParams(f: SearchFilters, q: string): URLSearchParam
     if (trimmed) params.set("q", trimmed);
     if (hasKind(f)) params.set("kind", f.kind);
     if (hasSource(f)) params.set("source", f.source);
+    if (hasWorkspace(f)) params.set("workspace", f.workspace);
+    if (hasMonitor(f)) params.set("monitor", f.monitor);
+    if (hasFullscreen(f)) params.set("fullscreen", f.fullscreen === "yes" ? "true" : "false");
     const { start, end } = dateRangeOf(f);
     if (start) params.set("start", start);
     if (end) params.set("end", end);
@@ -128,7 +160,15 @@ export function compileSearchParams(f: SearchFilters, q: string): URLSearchParam
     return params;
 }
 
-export type ChipId = "kind" | "source" | "date" | `app:${string}` | `player:${string}`;
+export type ChipId =
+    | "kind"
+    | "source"
+    | "date"
+    | "workspace"
+    | "monitor"
+    | "fullscreen"
+    | `app:${string}`
+    | `player:${string}`;
 
 export interface ActiveChip {
     id: ChipId;
@@ -144,6 +184,9 @@ export function activeChips(f: SearchFilters): ActiveChip[] {
     if (hasSource(f) && sourceLabel) chips.push({ id: "source", label: sourceLabel });
     for (const app of f.apps) chips.push({ id: `app:${app}`, label: app });
     for (const player of f.players) chips.push({ id: `player:${player}`, label: player });
+    if (hasWorkspace(f)) chips.push({ id: "workspace", label: `ws ${f.workspace}` });
+    if (hasMonitor(f)) chips.push({ id: "monitor", label: `monitor ${f.monitor}` });
+    if (hasFullscreen(f)) chips.push({ id: "fullscreen", label: `fullscreen ${f.fullscreen}` });
     if (hasDate(f)) {
         let label: string;
         if (f.start || f.end) {
@@ -155,34 +198,6 @@ export function activeChips(f: SearchFilters): ActiveChip[] {
         chips.push({ id: "date", label });
     }
     return chips;
-}
-
-/** Reset one filter dimension to its default (chip removal). */
-export function withChipRemoved(f: SearchFilters, id: ChipId): SearchFilters {
-    switch (id) {
-        case "kind":
-            return { ...f, kind: "all" };
-        case "source":
-            return { ...f, source: "any" };
-        case "date":
-            return { ...f, preset: "all", start: "", end: "" };
-        default: {
-            if (id.startsWith("app:")) {
-                const app = id.slice(4);
-                return { ...f, apps: f.apps.filter((a) => a !== app) };
-            }
-            if (id.startsWith("player:")) {
-                const player = id.slice(7);
-                return { ...f, players: f.players.filter((p) => p !== player) };
-            }
-            return f;
-        }
-    }
-}
-
-/** Toggle one value in a multi-select list (facet dropdowns). */
-export function toggleValue(list: string[], value: string): string[] {
-    return list.includes(value) ? list.filter((v) => v !== value) : [...list, value];
 }
 
 /** Apply the client-side app/player membership filters to a result page.

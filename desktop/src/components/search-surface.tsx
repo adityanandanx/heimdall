@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { SearchItem } from "@/lib/api";
 import { frameImageUrl } from "@/lib/api";
 import { relTime } from "@/lib/format";
@@ -13,13 +13,13 @@ import {
     PRESETS,
     searchActive,
     SOURCES,
-    toggleValue,
-    withChipRemoved,
     type ChipId,
     type SearchFilters,
 } from "@/lib/search-filters";
+import { applyQueryTokens, insertToken, parseQuery, removeOpTokens, removeToken } from "@/lib/query-language";
 import { cn } from "@/lib/utils";
 import { FacetDropdown } from "@/components/ui/facet-dropdown";
+import { GlowInput } from "@/components/ui/glow-input";
 import { useDayFrames, useDebouncedValue, useFacets, useSearch } from "@/hooks/use-day-browser";
 
 interface SearchSurfaceProps {
@@ -36,9 +36,47 @@ export function SearchSurface({ baseUrl, focusNonce, seed, onPick }: SearchSurfa
     const [q, setQ] = useState("");
     const [filters, setFilters] = useState<SearchFilters>(DEFAULT_FILTERS);
     const inputRef = useRef<HTMLInputElement>(null);
+    const nowRef = useRef<Date>(new Date());
 
-    const params = useMemo(() => compileSearchParams(filters, q), [filters, q]);
-    const active = useMemo(() => searchActive(filters, q), [filters, q]);
+    // The box text is the single source of truth for the text-authoritative
+    // dimensions (app/player/kind/source/ws/monitor/fullscreen); the parse
+    // projects them into filter state. Date dimensions live in the widgets.
+    const parsed = useMemo(() => parseQuery(q), [q]);
+    const setText = useCallback((text: string) => {
+        setQ(text);
+        setFilters((prev) => applyQueryTokens(prev, parseQuery(text), nowRef.current).filters);
+    }, []);
+
+    // Widget ↓ text sync (#60): absolute-select dims (kind/source) replace
+    // the token; multi-select dims (app/player) toggle one value in/out.
+    const setTextDim = (op: "kind" | "source", value: string) => {
+        const base = removeOpTokens(q, op);
+        const next = value === "all" || value === "any" ? base : insertToken(base, op, value);
+        if (op === "source") {
+            const noHas = removeOpTokens(next, "has");
+            setText(noHas);
+        } else {
+            setText(next);
+        }
+    };
+    const toggleTextValue = (op: "app" | "player", value: string) => {
+        const present = parsed.tokens.some(
+            (t) => t.op === op && t.value.toUpperCase() === value.toUpperCase() && !t.negated,
+        );
+        setText(present ? removeToken(q, op, value) : insertToken(q, op, value));
+    };
+    // Date widgets own the date dimension entirely — clear any date tokens.
+    const setDateDim = (partial: Partial<SearchFilters>) => {
+        const stripped = [removeOpTokens(q, "on"), removeOpTokens(q, "after"), removeOpTokens(q, "before")].pop()!;
+        setText(stripped);
+        setFilters((prev) => ({ ...prev, ...partial }));
+    };
+
+    const params = useMemo(() => {
+        const apiQ = parsed.text;
+        return compileSearchParams(filters, apiQ);
+    }, [parsed.text, filters]);
+    const active = useMemo(() => searchActive(filters, parsed.text), [filters, parsed.text]);
     // Debounce params and the gate as ONE object so they can never land in
     // an inconsistent intermediate state (spurious browse fetches).
     const scope = useMemo(() => ({ params, active }), [params, active]);
@@ -53,16 +91,44 @@ export function SearchSurface({ baseUrl, focusNonce, seed, onPick }: SearchSurfa
 
     // Seed the query when the day surface hands off a search.
     useEffect(() => {
-        if (seed) setQ(seed);
-    }, [seed]);
+        if (seed) setText(seed);
+    }, [seed, setText]);
 
-    const patch = (partial: Partial<SearchFilters>) =>
-        setFilters((prev) => ({ ...prev, ...partial }));
+    const removeChip = (id: ChipId) => {
+        // Chips for text-authoritative dimensions edit the box text (which
+        // then resets the state); the date chip clears the widgets too.
+        switch (id) {
+            case "kind":
+                setText(removeOpTokens(q, "kind"));
+                return;
+            case "source":
+                setText(removeOpTokens(removeOpTokens(q, "source"), "has"));
+                return;
+            case "workspace":
+                setText(removeOpTokens(q, "ws"));
+                return;
+            case "monitor":
+                setText(removeOpTokens(q, "monitor"));
+                return;
+            case "fullscreen":
+                setText(removeOpTokens(q, "fullscreen"));
+                return;
+            case "date":
+                setDateDim({ preset: "all", start: "", end: "" });
+                return;
+            default:
+                if (id.startsWith("app:")) {
+                    setText(removeToken(q, "app", id.slice(4)));
+                    return;
+                }
+                if (id.startsWith("player:")) {
+                    setText(removeToken(q, "player", id.slice(7)));
+                    return;
+                }
+        }
+    };
 
-    const removeChip = (id: ChipId) =>
-        setFilters((prev) => withChipRemoved(prev, id));
-
-    const query = q.trim();
+    const query = parsed.text;
     const chips = useMemo(() => activeChips(filters), [filters]);
     // Same gate the fetch hook uses (on raw state, so clearing filters hides
     // stale results instantly rather than after the debounce).
@@ -86,13 +152,13 @@ export function SearchSurface({ baseUrl, focusNonce, seed, onPick }: SearchSurfa
                 <span className="pointer-events-none absolute top-1/2 left-3.5 -translate-y-1/2 text-[15px] text-faint">
                     ⌕
                 </span>
-                <input
-                    ref={inputRef}
+                <GlowInput
                     value={q}
-                    onChange={(e) => setQ(e.currentTarget.value)}
+                    tokens={parsed.tokens}
+                    onChange={setText}
                     placeholder="e.g.  tauri setup  ·  lofi  ·  PR review"
-                    aria-label="search query"
-                    className="w-full rounded-lg border border-line bg-surface py-3 pr-14 pl-10 text-sm outline-none transition-shadow placeholder:text-faint focus:border-primary focus:shadow-[0_0_0_3px_rgba(97,175,239,0.18)]"
+                    ariaLabel="search query"
+                    inputRef={inputRef}
                 />
                 <span className="absolute top-1/2 right-3 -translate-y-1/2 font-mono text-[10px] text-dim">
                     {isFetching ? "…" : "⌘K"}
@@ -110,7 +176,7 @@ export function SearchSurface({ baseUrl, focusNonce, seed, onPick }: SearchSurfa
                         <button
                             key={k.id}
                             type="button"
-                            onClick={() => patch({ kind: k.id })}
+                            onClick={() => setTextDim("kind", k.id)}
                             className={cn(
                                 "px-2.5 py-1 text-[11px] transition-colors",
                                 filters.kind === k.id
@@ -125,13 +191,10 @@ export function SearchSurface({ baseUrl, focusNonce, seed, onPick }: SearchSurfa
                 <select
                     aria-label="date range preset"
                     value={filters.preset}
-                    onChange={(e) =>
-                        patch({
-                            preset: e.currentTarget.value as SearchFilters["preset"],
-                            start: "",
-                            end: "",
-                        })
-                    }
+                    onChange={(e) => {
+                        const preset = e.currentTarget.value as SearchFilters["preset"];
+                        setDateDim({ preset, start: "", end: "" });
+                    }}
                     className={CONTROL_CLASS}
                 >
                     {PRESETS.map((p) => (
@@ -144,26 +207,20 @@ export function SearchSurface({ baseUrl, focusNonce, seed, onPick }: SearchSurfa
                     type="datetime-local"
                     aria-label="start time"
                     value={filters.start}
-                    onChange={(e) =>
-                        patch({ start: e.currentTarget.value, preset: "all" })
-                    }
+                    onChange={(e) => setDateDim({ start: e.currentTarget.value, preset: "all" })}
                     className={CONTROL_CLASS}
                 />
                 <input
                     type="datetime-local"
                     aria-label="end time"
                     value={filters.end}
-                    onChange={(e) =>
-                        patch({ end: e.currentTarget.value, preset: "all" })
-                    }
+                    onChange={(e) => setDateDim({ end: e.currentTarget.value, preset: "all" })}
                     className={CONTROL_CLASS}
                 />
                 <select
                     aria-label="source type"
                     value={filters.source}
-                    onChange={(e) =>
-                        patch({ source: e.currentTarget.value as SearchFilters["source"] })
-                    }
+                    onChange={(e) => setTextDim("source", e.currentTarget.value as SearchFilters["source"])}
                     className={CONTROL_CLASS}
                 >
                     {SOURCES.map((s) => (
@@ -176,16 +233,16 @@ export function SearchSurface({ baseUrl, focusNonce, seed, onPick }: SearchSurfa
                     label="app"
                     options={facets?.apps ?? []}
                     selected={filters.apps}
-                    onToggle={(value) => patch({ apps: toggleValue(filters.apps, value) })}
-                    onClear={() => patch({ apps: [] })}
+                    onToggle={(value) => toggleTextValue("app", value)}
+                    onClear={() => setText(removeOpTokens(q, "app"))}
                     className={CONTROL_CLASS}
                 />
                 <FacetDropdown
                     label="player"
                     options={facets?.players ?? []}
                     selected={filters.players}
-                    onToggle={(value) => patch({ players: toggleValue(filters.players, value) })}
-                    onClear={() => patch({ players: [] })}
+                    onToggle={(value) => toggleTextValue("player", value)}
+                    onClear={() => setText(removeOpTokens(q, "player"))}
                     className={CONTROL_CLASS}
                 />
             </div>

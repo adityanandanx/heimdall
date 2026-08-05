@@ -73,6 +73,79 @@ describe("SearchSurface", () => {
         expect(searchRequestUrls).toHaveLength(0);
     });
 
+    it("compiles typed tokens into filters and keeps the text as the FTS query", async () => {
+        renderSearch();
+        fireEvent.change(screen.getByLabelText("search query"), {
+            target: { value: "roger app:sidra" },
+        });
+        expect(await screen.findByText("Omurice — Uncle Roger")).toBeInTheDocument();
+        const params = new URL(searchRequestUrls[searchRequestUrls.length - 1]).searchParams;
+        expect(params.get("q")).toBe("roger"); // tokens are stripped from the query text
+        expect(await screen.findByRole("button", { name: "remove sidra filter" })).toBeInTheDocument();
+    });
+
+    it("runs browse mode for tokens alone, with an empty FTS query", async () => {
+        renderSearch();
+        fireEvent.change(screen.getByLabelText("search query"), { target: { value: "app:terminal" } });
+        expect(await screen.findByRole("button", { name: "remove terminal filter" })).toBeInTheDocument();
+        await screen.findByText("htop");
+        expect(screen.queryByText("Heimdall docs")).not.toBeInTheDocument();
+        const params = new URL(searchRequestUrls[searchRequestUrls.length - 1]).searchParams;
+        expect(params.get("q")).toBeNull();
+    });
+
+    it("reflects widget selections back into the box text", async () => {
+        renderSearch();
+        fireEvent.click(screen.getByRole("button", { name: /^app/ }));
+        fireEvent.click(await screen.findByRole("checkbox", { name: "app browser" }));
+        expect(screen.getByLabelText("search query")).toHaveValue("app:browser");
+        // toggling the same app off removes the token again (dropdown stays open)
+        fireEvent.click(await screen.findByRole("checkbox", { name: "app browser" }));
+        expect(screen.getByLabelText("search query")).toHaveValue("");
+    });
+
+    it("kind and source widgets write their tokens into the box", async () => {
+        renderSearch();
+        fireEvent.click(screen.getByRole("button", { name: "frames" }));
+        expect(screen.getByLabelText("search query")).toHaveValue("kind:frame");
+        fireEvent.change(screen.getByLabelText("source type"), { target: { value: "ocr" } });
+        expect(screen.getByLabelText("search query")).toHaveValue("kind:frame source:ocr");
+    });
+
+    it("removing a chip removes the token from the box text", async () => {
+        renderSearch();
+        fireEvent.change(screen.getByLabelText("search query"), { target: { value: "roger app:sidra kind:session" } });
+        fireEvent.click(await screen.findByRole("button", { name: "remove sidra filter" }));
+        expect(screen.getByLabelText("search query")).toHaveValue("roger kind:session");
+        fireEvent.click(await screen.findByRole("button", { name: "remove sessions filter" }));
+        expect(screen.getByLabelText("search query")).toHaveValue("roger");
+    });
+
+    it("on: sets a custom day range in the widgets", async () => {
+        renderSearch();
+        fireEvent.change(screen.getByLabelText("search query"), { target: { value: "on:2026-06-05" } });
+        expect(await screen.findByRole("button", { name: /remove .* filter/ })).toBeInTheDocument();
+        expect(screen.getByLabelText("start time")).toHaveValue("2026-06-05T00:00");
+        expect(screen.getByLabelText("end time")).toHaveValue("2026-06-06T00:00");
+    });
+
+    it("binds after:HH:MM to the widget range's start day", async () => {
+        renderSearch();
+        fireEvent.change(screen.getByLabelText("date range preset"), { target: { value: "today" } });
+        fireEvent.change(screen.getByLabelText("search query"), { target: { value: "after:09:30" } });
+        expect(await screen.findByRole("button", { name: /remove .* filter/ })).toBeInTheDocument();
+        const start = (screen.getByLabelText("start time") as HTMLInputElement).value;
+        expect(start).toMatch(/T09:30$/);
+    });
+
+    it("glows recognized tokens in the overlay mirror", async () => {
+        renderSearch();
+        fireEvent.change(screen.getByLabelText("search query"), { target: { value: "roger app:sidra" } });
+        const mirror = document.querySelector('[aria-hidden="true"]');
+        expect(mirror?.textContent).toContain("app:sidra");
+        expect(mirror?.querySelectorAll("span[class*='text-primary']").length).toBe(1);
+    });
+
     it("browses newest-first with only a kind filter and no text", async () => {
         renderSearch();
         const urls = searchRequestUrls;
