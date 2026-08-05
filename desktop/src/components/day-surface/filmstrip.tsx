@@ -11,14 +11,12 @@ import {
     frameNear,
     playerColor,
     tsOf,
-    tsMs,
     type Span,
 } from "@/lib/timeline";
 import { cn } from "@/lib/utils";
 
 const MIN_PPM = 2;
 const MAX_PPM = 120;
-const DENSITY_BUCKETS = 48;
 
 const DOTS_ROW_H = 32;
 const LANE_H = 22;
@@ -47,21 +45,6 @@ export function Filmstrip({ frames, sessions, selected, onSelect, hits, filterCl
     const anchorFracRef = useRef(0);
     const anchorKeepRef = useRef(-1);
     const hoverIdRef = useRef<number | null>(null);
-
-    const density = useMemo(() => {
-        if (!frames.length) return [] as number[];
-        const start = tsMs(frames[0].ts);
-        const end = tsMs(frames[frames.length - 1].ts);
-        const span = Math.max(end - start, 1);
-        const buckets = new Array<number>(DENSITY_BUCKETS).fill(0);
-        for (const f of frames) {
-            const i = Math.min(DENSITY_BUCKETS - 1, Math.floor(((tsMs(f.ts) - start) / span) * DENSITY_BUCKETS));
-            buckets[i]++;
-        }
-        return buckets;
-    }, [frames]);
-
-    const maxDensity = Math.max(1, ...density);
 
     const runs = useMemo(() => buildRuns(sessions), [sessions]);
     const laneRuns = useMemo(() => assignLanes(runs), [runs]);
@@ -161,19 +144,6 @@ export function Filmstrip({ frames, sessions, selected, onSelect, hits, filterCl
                 className="overflow-x-auto overflow-y-hidden pb-1.5 [scrollbar-width:thin]"
             >
                 <div className="relative" style={{ width: Math.max(axisW, 100) }}>
-                    <div className="mb-2 flex h-6 items-end gap-0.5">
-                        {density.map((n, i) => (
-                            <div
-                                key={i}
-                                className={cn(
-                                    "min-w-0.5 flex-1 rounded-t-[2px] bg-primary/28",
-                                    n >= maxDensity * 0.6 && n > 0 && "bg-primary/75",
-                                )}
-                                style={{ height: n ? Math.max(3, Math.min(24, n * 2.2)) : 3 }}
-                            />
-                        ))}
-                    </div>
-
                     <div
                         ref={timelineRef}
                         className="relative cursor-pointer touch-none overflow-hidden rounded-md border border-line bg-surface-2 select-none"
