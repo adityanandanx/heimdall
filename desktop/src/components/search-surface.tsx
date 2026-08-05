@@ -16,7 +16,16 @@ import {
     type ChipId,
     type SearchFilters,
 } from "@/lib/search-filters";
-import { applyQueryTokens, insertToken, parseQuery, removeOpTokens, removeToken } from "@/lib/query-language";
+import {
+    applyQueryTokens,
+    insertToken,
+    parseQuery,
+    removeDateTokens,
+    removeOpTokens,
+    removeSourceTokens,
+    removeToken,
+    tokenMatch,
+} from "@/lib/query-language";
 import { cn } from "@/lib/utils";
 import { FacetDropdown } from "@/components/ui/facet-dropdown";
 import { GlowInput } from "@/components/ui/glow-input";
@@ -50,25 +59,23 @@ export function SearchSurface({ baseUrl, focusNonce, seed, onPick }: SearchSurfa
     // Widget ↓ text sync (#60): absolute-select dims (kind/source) replace
     // the token; multi-select dims (app/player) toggle one value in/out.
     const setTextDim = (op: "kind" | "source", value: string) => {
-        const base = removeOpTokens(q, op);
-        const next = value === "all" || value === "any" ? base : insertToken(base, op, value);
-        if (op === "source") {
-            const noHas = removeOpTokens(next, "has");
-            setText(noHas);
-        } else {
-            setText(next);
-        }
+        const base = op === "source" ? removeSourceTokens(q) : removeOpTokens(q, op);
+        setText(value === "all" || value === "any" ? base : insertToken(base, op, value));
     };
     const toggleTextValue = (op: "app" | "player", value: string) => {
-        const present = parsed.tokens.some(
-            (t) => t.op === op && t.value.toUpperCase() === value.toUpperCase() && !t.negated,
-        );
-        setText(present ? removeToken(q, op, value) : insertToken(q, op, value));
+        const match = parsed.tokens.find((t) => tokenMatch(t, op, value) && !t.negated);
+        if (!match) {
+            setText(insertToken(q, op, value));
+        } else if (match.value === value) {
+            setText(removeToken(q, op, value));
+        } else {
+            // Token typed with different casing — replace, don't invert.
+            setText(insertToken(removeToken(q, op, match.value), op, value));
+        }
     };
     // Date widgets own the date dimension entirely — clear any date tokens.
     const setDateDim = (partial: Partial<SearchFilters>) => {
-        const stripped = [removeOpTokens(q, "on"), removeOpTokens(q, "after"), removeOpTokens(q, "before")].pop()!;
-        setText(stripped);
+        setText(removeDateTokens(q));
         setFilters((prev) => ({ ...prev, ...partial }));
     };
 
@@ -102,7 +109,7 @@ export function SearchSurface({ baseUrl, focusNonce, seed, onPick }: SearchSurfa
                 setText(removeOpTokens(q, "kind"));
                 return;
             case "source":
-                setText(removeOpTokens(removeOpTokens(q, "source"), "has"));
+                setText(removeSourceTokens(q));
                 return;
             case "workspace":
                 setText(removeOpTokens(q, "ws"));

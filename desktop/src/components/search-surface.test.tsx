@@ -146,6 +146,29 @@ describe("SearchSurface", () => {
         expect(mirror?.querySelectorAll("span[class*='text-primary']").length).toBe(1);
     });
 
+    it("changing the date widget strips stale date tokens from the box", async () => {
+        renderSearch();
+        fireEvent.change(screen.getByLabelText("search query"), { target: { value: "on:2026-06-05 roger" } });
+        expect(screen.getByLabelText("start time")).toHaveValue("2026-06-05T00:00");
+        fireEvent.change(screen.getByLabelText("date range preset"), { target: { value: "today" } });
+        // the on: token is gone so it can't re-apply over the widget's choice
+        expect(screen.getByLabelText("search query")).toHaveValue("roger");
+        fireEvent.change(screen.getByLabelText("search query"), { target: { value: "roger after:09:30 before:18:00" } });
+        fireEvent.change(screen.getByLabelText("date range preset"), { target: { value: "all" } });
+        expect(screen.getByLabelText("search query")).toHaveValue("roger");
+    });
+
+    it("replaces a differently-cased token when toggled via the widget", async () => {
+        renderSearch();
+        fireEvent.change(screen.getByLabelText("search query"), { target: { value: "app:BROWSER" } });
+        expect(await screen.findByRole("button", { name: "remove BROWSER filter" })).toBeInTheDocument();
+        fireEvent.click(screen.getByRole("button", { name: /^app/ }));
+        fireEvent.click(await screen.findByRole("checkbox", { name: "app browser" }));
+        // token was replaced, not doubly-added or inverted
+        expect(screen.getByLabelText("search query")).toHaveValue("app:browser");
+        expect(screen.queryByRole("button", { name: "remove BROWSER filter" })).not.toBeInTheDocument();
+    });
+
     it("browses newest-first with only a kind filter and no text", async () => {
         renderSearch();
         const urls = searchRequestUrls;

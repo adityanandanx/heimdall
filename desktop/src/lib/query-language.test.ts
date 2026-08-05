@@ -36,7 +36,7 @@ describe("parseQuery", () => {
         expect(tokens.every((t) => !t.negated)).toBe(true);
     });
 
-it("is case-insensitive for operators and enum values", () => {
+    it("is case-insensitive for operators and enum values", () => {
         const { tokens } = parseQuery("APP:Sidra KIND:FRAME SOURCE:A11y Fullscreen:Yes HAS:TranscriPT");
         expect(tokens.map((t) => `${t.op}:${t.value}`)).toEqual([
             "app:Sidra", // non-enum values keep their case (window_class match)

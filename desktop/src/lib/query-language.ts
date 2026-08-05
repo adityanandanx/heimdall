@@ -30,7 +30,7 @@ export interface QueryToken {
     start: number;
     end: number;
     /** after:/before: with a bare HH:MM value. */
-    isTime?: boolean;
+    isTime: boolean;
 }
 
 export interface ParsedQuery {
@@ -162,7 +162,7 @@ function classifyWord(raw: string): Omit<QueryToken, "raw" | "start" | "end"> | 
 
 /** Day context a bare after:/before: time binds to: the `on:` token's day,
  * else the widget date range's start day, else nothing. */
-export function timeContextDay(
+function timeContextDay(
     parsed: ParsedQuery,
     filters: Pick<SearchFilters, "preset" | "start" | "end">,
     now: Date,
@@ -302,46 +302,63 @@ export function applyQueryTokens(
     return { filters: next, text: [...parsed.text.split(/\s+/).filter(Boolean), ...unresolved].join(" ") };
 }
 
+/** Case-insensitive match for a token (op + value, negation ignored). */
+export function tokenMatch(t: QueryToken, op: QueryOperator, value: string): boolean {
+    return t.op === op && t.value.toUpperCase() === value.toUpperCase();
+}
+
 /** Append `op:value` to the box text unless an identical token already exists. */
 export function insertToken(text: string, op: QueryOperator, value: string): string {
     const parsed = parseQuery(text);
-    if (parsed.tokens.some((t) => t.op === op && t.value.toUpperCase() === value.toUpperCase() && !t.negated)) {
+    if (parsed.tokens.some((t) => tokenMatch(t, op, value) && !t.negated)) {
         return text;
     }
     const trimmed = text.trimEnd();
     return trimmed ? `${trimmed} ${op}:${value}` : `${op}:${value}`;
 }
 
-/** Remove one specific token (op + value) from the box text. */
+/** Remove one specific token (op + value, case-insensitive) from the text. */
 export function removeToken(text: string, op: QueryOperator, value: string): string {
     const parsed = parseQuery(text);
-    const out: string[] = [];
+    const keep: string[] = [];
     let prev = 0;
     let changed = false;
     for (const t of parsed.tokens) {
-        if (t.op === op && t.value.toUpperCase() === value.toUpperCase()) {
-            out.push(text.slice(prev, t.start).trim());
+        if (tokenMatch(t, op, value)) {
+            keep.push(text.slice(prev, t.start).trim());
             prev = t.end;
             changed = true;
-        } else {
-            out.push("");
         }
     }
     if (!changed) return text;
-    out.push(text.slice(prev).trim());
-    return out.filter(Boolean).join(" ");
+    keep.push(text.slice(prev).trim());
+    return keep.filter(Boolean).join(" ");
 }
 
 /** Remove every token of one operator from the box text. */
 export function removeOpTokens(text: string, op: QueryOperator): string {
     const parsed = parseQuery(text);
-    const spans: Array<[number, number]> = [];
+    const keep: string[] = [];
+    let prev = 0;
+    let changed = false;
     for (const t of parsed.tokens) {
-        if (t.op === op) spans.push([t.start, t.end]);
+        if (t.op === op) {
+            keep.push(text.slice(prev, t.start).trim());
+            prev = t.end;
+            changed = true;
+        }
     }
-    let out = text;
-    for (const [s, e] of spans.reverse()) {
-        out = `${out.slice(0, s)}${out.slice(e)}`;
-    }
-    return out.split(/\s+/).filter(Boolean).join(" ");
+    if (!changed) return text;
+    keep.push(text.slice(prev).trim());
+    return keep.filter(Boolean).join(" ");
+}
+
+/** Remove both spellings of the source dimension (source:/has:). */
+export function removeSourceTokens(text: string): string {
+    return removeOpTokens(removeOpTokens(text, "source"), "has");
+}
+
+/** Remove every date token (on:/after:/before:). */
+export function removeDateTokens(text: string): string {
+    return removeOpTokens(removeOpTokens(removeOpTokens(text, "on"), "after"), "before");
 }

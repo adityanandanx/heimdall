@@ -208,13 +208,15 @@ export function activeChips(f: SearchFilters): ActiveChip[] {
  */
 export function filterItems(f: SearchFilters, items: SearchItem[]): SearchItem[] {
     let result = items;
+    // window_class/player values may be typed at any casing (#60); match
+    // case-insensitively against what the facet endpoint reports.
     if (hasApps(f)) {
-        // only frames carry a window_class — sessions pass through
-        result = result.filter((i) => i.kind === "session" || f.apps.includes(i.window_class));
+        const wanted = f.apps.map((a) => a.toLowerCase());
+        result = result.filter((i) => i.kind === "session" || wanted.includes(i.window_class.toLowerCase()));
     }
     if (hasPlayers(f)) {
-        // only sessions carry a player — frames pass through
-        result = result.filter((i) => i.kind === "frame" || f.players.includes(i.player ?? ""));
+        const wanted = f.players.map((p) => p.toLowerCase());
+        result = result.filter((i) => i.kind === "frame" || wanted.includes((i.player ?? "").toLowerCase()));
     }
     return result;
 }
