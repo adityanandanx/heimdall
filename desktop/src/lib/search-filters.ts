@@ -59,6 +59,12 @@ export const SOURCES: Array<{ id: SourceFilter; label: string }> = [
     { id: "transcript", label: "transcript" },
 ];
 
+export const FULLSCREENS: Array<{ id: FullscreenFilter; label: string }> = [
+    { id: "any", label: "any" },
+    { id: "yes", label: "fullscreen" },
+    { id: "no", label: "windowed" },
+];
+
 export function hasKind(f: SearchFilters): boolean {
     return f.kind !== "all";
 }
@@ -148,21 +154,32 @@ export function dateRangeOf(
     }
 }
 
-/** The /search query params for the current query + filters. */
-export function compileSearchParams(f: SearchFilters, q: string): URLSearchParams {
+/** The /search query params for the current query + filters.
+ *
+ * `sort` only matters with a text query: text present → `score` (relevance,
+ * the default, #62) or the user's chosen `ts`; no text → browse mode is
+ * always newest-first (`ts`). Frame attributes (ws/monitor/fullscreen) apply
+ * to frames only — they are never sent for a session-only scope.
+ */
+export function compileSearchParams(
+    f: SearchFilters,
+    q: string,
+    sort: "score" | "ts" = "score",
+): URLSearchParams {
     const params = new URLSearchParams();
     const trimmed = q.trim();
     if (trimmed) params.set("q", trimmed);
     if (hasKind(f)) params.set("kind", f.kind);
     if (hasSource(f)) params.set("source", f.source);
-    if (hasWorkspace(f)) params.set("workspace", f.workspace);
-    if (hasMonitor(f)) params.set("monitor", f.monitor);
-    if (hasFullscreen(f)) params.set("fullscreen", f.fullscreen === "yes" ? "true" : "false");
+    if (f.kind !== "session") {
+        if (hasWorkspace(f)) params.set("workspace", f.workspace);
+        if (hasMonitor(f)) params.set("monitor", f.monitor);
+        if (hasFullscreen(f)) params.set("fullscreen", f.fullscreen === "yes" ? "true" : "false");
+    }
     const { start, end } = dateRangeOf(f);
     if (start) params.set("start", start);
     if (end) params.set("end", end);
-    // The search timeline is always newest-first (#37/#58); the API's default.
-    params.set("sort", "ts");
+    params.set("sort", trimmed ? sort : "ts");
     return params;
 }
 

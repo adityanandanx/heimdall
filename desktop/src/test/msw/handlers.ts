@@ -176,6 +176,8 @@ export const searchFixtures = [
         window_class: "browser",
         window_title: "Heimdall docs",
         workspace: 1,
+        monitor: 0,
+        fullscreen: 0,
         image_path: "/tmp/heimdall/frames/2.png",
         snippet: "Heimdall **documentation** in browser",
         score: 1.9,
@@ -186,7 +188,9 @@ export const searchFixtures = [
         ts: localISO(at(11, 0)),
         window_class: "browser",
         window_title: "PNG spec",
-        workspace: 1,
+        workspace: 2,
+        monitor: 1,
+        fullscreen: 1,
         image_path: "/tmp/heimdall/frames/3.png",
         snippet: "portable network graphics — **images**",
         score: 0.7,
@@ -198,6 +202,8 @@ export const searchFixtures = [
         window_class: "terminal",
         window_title: "htop",
         workspace: 1,
+        monitor: 0,
+        fullscreen: 0,
         image_path: "/tmp/heimdall/frames/4.png",
         snippet: "process **monitor** — pid column",
         score: 0.5,
@@ -329,6 +335,9 @@ export const handlers = [
         const source = url.searchParams.get("source");
         const start = url.searchParams.get("start");
         const end = url.searchParams.get("end");
+        const workspace = url.searchParams.get("workspace");
+        const monitor = url.searchParams.get("monitor");
+        const fullscreen = url.searchParams.get("fullscreen");
         const offset = Number(url.searchParams.get("offset") ?? 0);
         const limit = Number(url.searchParams.get("limit") ?? 100);
         let items = [...searchFixtures, ...searchFixtureExtras].filter((s) =>
@@ -339,6 +348,10 @@ export const handlers = [
         if (source === "a11y") items = items.filter((s) => searchSources[s.id] === "a11y");
         if (source === "ocr") items = items.filter((s) => searchSources[s.id] === "ocr");
         if (source === "transcript") items = items.filter((s) => searchSources[s.id] === "session");
+        // Frame attributes apply to frames only; sessions never match (#63).
+        if (workspace) items = items.filter((s) => s.kind === "session" || s.workspace === Number(workspace));
+        if (monitor) items = items.filter((s) => s.kind === "session" || s.monitor === Number(monitor));
+        if (fullscreen) items = items.filter((s) => s.kind === "session" || s.fullscreen === (fullscreen === "true" ? 1 : 0));
         if (start) items = items.filter((s) => s.ts >= start);
         if (end) items = items.filter((s) => s.ts <= end);
         items = [...items].sort((a, b) => (a.ts < b.ts ? 1 : a.ts > b.ts ? -1 : 0));
@@ -352,6 +365,8 @@ export const handlers = [
         const kind = url.searchParams.get("kind");
         const start = url.searchParams.get("start");
         const end = url.searchParams.get("end");
+        const workspace = url.searchParams.get("workspace");
+        const monitor = url.searchParams.get("monitor");
         const inScope = (s: SearchFixture) =>
             (kind ? s.kind === kind : true) &&
             (s.snippet + s.window_class + (s.window_title ?? "")).toLowerCase().includes(q) &&
@@ -369,9 +384,16 @@ export const handlers = [
                 .slice(0, 25);
         };
         const scoped = searchFixtures.filter(inScope);
+        // Classic faceting: workspace narrows the *other* frame dimensions
+        // (apps, monitors) but never its own facet, and vice versa (#63).
+        const frames = scoped.filter((s) => s.kind === "frame");
+        const inWorkspace = (s: SearchFixture) => !workspace || s.workspace === Number(workspace);
+        const inMonitor = (s: SearchFixture) => !monitor || s.monitor === Number(monitor);
         return HttpResponse.json({
-            apps: topFacets(scoped.filter((s) => s.kind === "frame"), (s) => s.window_class ?? ""),
+            apps: topFacets(frames.filter(inWorkspace).filter(inMonitor), (s) => s.window_class ?? ""),
             players: topFacets(scoped.filter((s) => s.kind === "session"), (s) => s.player ?? s.window_class ?? ""),
+            workspaces: topFacets(frames.filter(inMonitor), (s) => String(s.workspace)),
+            monitors: topFacets(frames.filter(inWorkspace), (s) => String(s.monitor)),
         });
     }),
     http.post(`${base}/pipes/run/:name`, ({ params }) => {

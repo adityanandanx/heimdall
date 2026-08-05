@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef } from "react";
 import type { SearchItem } from "@/lib/api";
 import { frameImageUrl } from "@/lib/api";
 import { relTime } from "@/lib/format";
@@ -8,8 +8,8 @@ import { AppChip } from "@/components/app-chip";
 import {
     activeChips,
     compileSearchParams,
-    DEFAULT_FILTERS,
     filterItems,
+    FULLSCREENS,
     KINDS,
     PRESETS,
     searchActive,
@@ -31,6 +31,11 @@ import { cn } from "@/lib/utils";
 import { FacetDropdown } from "@/components/ui/facet-dropdown";
 import { GlowInput } from "@/components/ui/glow-input";
 import { useDayFrames, useDebouncedValue, useFacets, useSearch } from "@/hooks/use-day-browser";
+import {
+    getSessionSearch,
+    setSessionSearch,
+    useSessionSearch,
+} from "@/lib/session-search";
 
 interface SearchSurfaceProps {
     baseUrl: string;
@@ -43,25 +48,28 @@ const CONTROL_CLASS =
     "rounded-md border border-line bg-surface px-2 py-1 text-[11px] text-dim outline-none focus:border-primary [color-scheme:dark]";
 
 export function SearchSurface({ baseUrl, focusNonce, seed, onPick }: SearchSurfaceProps) {
-    const [q, setQ] = useState("");
-    const [filters, setFilters] = useState<SearchFilters>(DEFAULT_FILTERS);
     const inputRef = useRef<HTMLInputElement>(null);
     const nowRef = useRef<Date>(new Date());
+    // In-session store: query, filters and sort survive surface switches
+    // (#55/#62) — the component remounts per tab, the store does not.
+    const { q, filters, sort } = useSessionSearch();
 
     // The box text is the single source of truth for the text-authoritative
     // dimensions (app/player/kind/source/ws/monitor/fullscreen); the parse
     // projects them into filter state. Date dimensions live in the widgets.
     const parsed = useMemo(() => parseQuery(q), [q]);
     const setText = useCallback((text: string) => {
-        setQ(text);
-        setFilters((prev) => applyQueryTokens(prev, parseQuery(text), nowRef.current).filters);
+        const prev = getSessionSearch();
+        const { filters: next } = applyQueryTokens(prev.filters, parseQuery(text), nowRef.current);
+        setSessionSearch({ q: text, filters: next });
     }, []);
 
-    // Widget ↓ text sync (#60): absolute-select dims (kind/source) replace
-    // the token; multi-select dims (app/player) toggle one value in/out.
-    const setTextDim = (op: "kind" | "source", value: string) => {
+    // Widget ↓ text sync: absolute-select dims (kind/source/ws/monitor/
+    // fullscreen) replace the token; multi-select dims (app/player) toggle
+    // one value in/out.
+    const setTextDim = (op: "kind" | "source" | "ws" | "monitor" | "fullscreen", value: string) => {
         const base = op === "source" ? removeSourceTokens(q) : removeOpTokens(q, op);
-        setText(value === "all" || value === "any" ? base : insertToken(base, op, value));
+        setText(value === "all" || value === "any" || value === "" ? base : insertToken(base, op, value));
     };
     const toggleTextValue = (op: "app" | "player", value: string) => {
         const match = parsed.tokens.find((t) => tokenMatch(t, op, value) && !t.negated);
@@ -76,14 +84,14 @@ export function SearchSurface({ baseUrl, focusNonce, seed, onPick }: SearchSurfa
     };
     // Date widgets own the date dimension entirely — clear any date tokens.
     const setDateDim = (partial: Partial<SearchFilters>) => {
-        setText(removeDateTokens(q));
-        setFilters((prev) => ({ ...prev, ...partial }));
+        const prev = getSessionSearch();
+        setSessionSearch({ q: removeDateTokens(prev.q), filters: { ...prev.filters, ...partial } });
     };
 
     const params = useMemo(() => {
         const apiQ = parsed.text;
-        return compileSearchParams(filters, apiQ);
-    }, [parsed.text, filters]);
+        return compileSearchParams(filters, apiQ, sort);
+    }, [parsed.text, filters, sort]);
     const active = useMemo(() => searchActive(filters, parsed.text), [filters, parsed.text]);
     // Debounce params and the gate as ONE object so they can never land in
     // an inconsistent intermediate state (spurious browse fetches).
@@ -267,6 +275,54 @@ export function SearchSurface({ baseUrl, focusNonce, seed, onPick }: SearchSurfa
                         </option>
                     ))}
                 </select>
+                <div
+                    role="group"
+                    aria-label="fullscreen filter"
+                    className="flex overflow-hidden rounded-full border border-line"
+                >
+                    {FULLSCREENS.map((fs) => (
+                        <button
+                            key={fs.id}
+                            type="button"
+                            aria-pressed={filters.fullscreen === fs.id}
+                            onClick={() => setTextDim("fullscreen", fs.id)}
+                            className={cn(
+                                "px-2.5 py-1 text-[11px] transition-colors",
+                                filters.fullscreen === fs.id
+                                    ? "bg-primary/15 text-primary"
+                                    : "text-dim hover:text-foreground",
+                            )}
+                        >
+                            {fs.label}
+                        </button>
+                    ))}
+                </div>
+                <select
+                    aria-label="workspace filter"
+                    value={filters.workspace}
+                    onChange={(e) => setTextDim("ws", e.currentTarget.value)}
+                    className={CONTROL_CLASS}
+                >
+                    <option value="">any workspace</option>
+                    {(facets?.workspaces ?? []).map((ws) => (
+                        <option key={ws.value} value={ws.value}>
+                            workspace {ws.value}
+                        </option>
+                    ))}
+                </select>
+                <select
+                    aria-label="monitor filter"
+                    value={filters.monitor}
+                    onChange={(e) => setTextDim("monitor", e.currentTarget.value)}
+                    className={CONTROL_CLASS}
+                >
+                    <option value="">any monitor</option>
+                    {(facets?.monitors ?? []).map((m) => (
+                        <option key={m.value} value={m.value}>
+                            monitor {m.value}
+                        </option>
+                    ))}
+                </select>
                 <FacetDropdown
                     label="app"
                     options={facets?.apps ?? []}
@@ -285,6 +341,16 @@ export function SearchSurface({ baseUrl, focusNonce, seed, onPick }: SearchSurfa
                     onClear={() => setText(removeOpTokens(q, "player"))}
                     className={CONTROL_CLASS}
                 />
+                {parsed.text.trim().length > 0 && (
+                    <div
+                        role="group"
+                        aria-label="sort order"
+                        className="ml-auto flex overflow-hidden rounded-full border border-line"
+                    >
+                        <SortOption active={sort === "score"} label="relevance" onClick={() => setSessionSearch({ sort: "score" })} />
+                        <SortOption active={sort === "ts"} label="newest" onClick={() => setSessionSearch({ sort: "ts" })} />
+                    </div>
+                )}
             </div>
 
             {chips.length > 0 && (
@@ -414,6 +480,23 @@ function ResultCard({
                     </span>
                 </div>
             </div>
+        </button>
+    );
+}
+
+function SortOption({ active, label, onClick }: { active: boolean; label: string; onClick: () => void }) {
+    return (
+        <button
+            type="button"
+            onClick={onClick}
+            aria-pressed={active}
+            className={
+                active
+                    ? "bg-primary/15 px-2.5 py-1 text-[11px] text-primary"
+                    : "px-2.5 py-1 text-[11px] text-dim transition-colors hover:text-foreground"
+            }
+        >
+            {label}
         </button>
     );
 }

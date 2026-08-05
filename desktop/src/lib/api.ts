@@ -190,16 +190,19 @@ export interface FacetValue {
 export interface FacetResponse {
     apps: FacetValue[];
     players: FacetValue[];
+    workspaces: FacetValue[];
+    monitors: FacetValue[];
 }
 
-/** Facet counts for the current scope (top apps/players, #57). */
+/** Facet counts for the current scope (top apps/players/workspaces/monitors,
+ * #57/#63). The workspace/monitor params narrow the *other* frame facets. */
 export function fetchFacets(
     base: string,
     params: URLSearchParams,
     signal?: AbortSignal,
 ): Promise<FacetResponse> {
     const clean = new URLSearchParams();
-    for (const key of ["q", "kind", "start", "end"]) {
+    for (const key of ["q", "kind", "start", "end", "workspace", "monitor"]) {
         const value = params.get(key);
         if (value) clean.set(key, value);
     }

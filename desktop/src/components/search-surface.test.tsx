@@ -4,6 +4,7 @@ import { SearchSurface } from "./search-surface";
 import { base, searchRequestUrls, setSearchResponseDelay } from "@/test/msw/handlers";
 import { renderWithQuery } from "@/test/render";
 import { dayBoundsISO, localISO } from "@/lib/timeline";
+import { resetSessionSearch } from "@/lib/session-search";
 
 function renderSearch() {
     const onPick = vi.fn();
@@ -13,6 +14,7 @@ function renderSearch() {
 
 describe("SearchSurface", () => {
     beforeEach(() => {
+        resetSessionSearch();
         searchRequestUrls.length = 0;
         setSearchResponseDelay(0);
     });
@@ -425,5 +427,138 @@ describe("SearchSurface", () => {
             expect(new URL(searchRequestUrls[searchRequestUrls.length - 1]).searchParams.get("q"))
                 .toBe("zzzznothing"),
         );
+    });
+
+    it("browses newest-first with the relevance toggle hidden (#62)", async () => {
+        renderSearch();
+        await waitFor(() => expect(searchRequestUrls.length).toBe(1));
+        const params = new URL(searchRequestUrls[0]).searchParams;
+        expect(params.get("sort")).toBe("ts");
+        expect(screen.queryByRole("group", { name: "sort order" })).not.toBeInTheDocument();
+    });
+
+    it("defaults to relevance sort once text is present (#62)", async () => {
+        renderSearch();
+        fireEvent.change(screen.getByLabelText("search query"), { target: { value: "roger" } });
+        await waitFor(() =>
+            expect(new URL(searchRequestUrls[searchRequestUrls.length - 1]).searchParams.get("q")).toBe("roger"),
+        );
+        expect(new URL(searchRequestUrls[searchRequestUrls.length - 1]).searchParams.get("sort")).toBe("score");
+        const toggle = screen.getByRole("group", { name: "sort order" });
+        expect(toggle).toHaveTextContent("relevance");
+        expect(toggle).toHaveTextContent("newest");
+    });
+
+    it("switches the sort with the toggle (#62)", async () => {
+        renderSearch();
+        fireEvent.change(screen.getByLabelText("search query"), { target: { value: "roger" } });
+        await waitFor(() => expect(searchRequestUrls.length).toBe(2));
+        expect(screen.getByRole("button", { name: "relevance" })).toHaveAttribute("aria-pressed", "true");
+        fireEvent.click(screen.getByRole("button", { name: "newest" }));
+        expect(screen.getByRole("button", { name: "newest" })).toHaveAttribute("aria-pressed", "true");
+        await waitFor(() =>
+            expect(new URL(searchRequestUrls[searchRequestUrls.length - 1]).searchParams.get("sort")).toBe("ts"),
+        );
+        // Back to relevance: the ts→score transition reuses the cached score
+        // scope (no new request), so assert the active state instead.
+        fireEvent.click(screen.getByRole("button", { name: "relevance" }));
+        expect(screen.getByRole("button", { name: "relevance" })).toHaveAttribute("aria-pressed", "true");
+        fireEvent.change(screen.getByLabelText("search query"), { target: { value: "roger z" } });
+        await waitFor(() =>
+            expect(new URL(searchRequestUrls[searchRequestUrls.length - 1]).searchParams.get("q")).toBe("roger z"),
+        );
+        expect(new URL(searchRequestUrls[searchRequestUrls.length - 1]).searchParams.get("sort")).toBe("score");
+    });
+
+    it("keeps the chosen query and sort across remounts within the session (#62)", async () => {
+        const { unmount } = renderWithQuery(
+            <SearchSurface baseUrl={base} focusNonce={1} seed="" onPick={vi.fn()} />,
+        );
+        fireEvent.change(screen.getByLabelText("search query"), { target: { value: "roger" } });
+        await waitFor(() => expect(searchRequestUrls.length).toBe(2));
+        fireEvent.click(screen.getByRole("button", { name: "newest" }));
+        await waitFor(() =>
+            expect(new URL(searchRequestUrls[searchRequestUrls.length - 1]).searchParams.get("sort")).toBe("ts"),
+        );
+        unmount(); // navigating away unmounts the surface…
+
+        searchRequestUrls.length = 0; // fresh mount must fetch, not replay
+        renderWithQuery(<SearchSurface baseUrl={base} focusNonce={1} seed="" onPick={vi.fn()} />);
+        // Query AND sort both survived the remount within the session.
+        expect(screen.getByLabelText("search query")).toHaveValue("roger");
+        fireEvent.change(screen.getByLabelText("search query"), { target: { value: "roger z" } });
+        await waitFor(() =>
+            expect(new URL(searchRequestUrls[searchRequestUrls.length - 1]).searchParams.get("q")).toBe("roger z"),
+        );
+        expect(new URL(searchRequestUrls[searchRequestUrls.length - 1]).searchParams.get("sort")).toBe("ts");
+    });
+
+    it("writes the fullscreen segmented control into the box and params (#63)", async () => {
+        renderSearch();
+        fireEvent.click(screen.getByRole("button", { name: "fullscreen" }));
+        expect(screen.getByLabelText("search query")).toHaveValue("fullscreen:yes");
+        await waitFor(() =>
+            expect(new URL(searchRequestUrls[searchRequestUrls.length - 1]).searchParams.get("fullscreen")).toBe("true"),
+        );
+        fireEvent.click(screen.getByRole("button", { name: "windowed" }));
+        await waitFor(() =>
+            expect(new URL(searchRequestUrls[searchRequestUrls.length - 1]).searchParams.get("fullscreen")).toBe("false"),
+        );
+        expect(screen.getByLabelText("search query")).toHaveValue("fullscreen:no");
+        fireEvent.click(screen.getByRole("button", { name: "any" }));
+        expect(screen.getByLabelText("search query")).toHaveValue("");
+    });
+
+    it("picks a workspace and monitor from the facet dropdowns into params (#63)", async () => {
+        renderSearch();
+        await waitFor(() => expect(screen.getByRole("option", { name: "workspace 2" })).toBeInTheDocument());
+        fireEvent.change(screen.getByLabelText("workspace filter"), { target: { value: "2" } });
+        expect(screen.getByLabelText("search query")).toHaveValue("ws:2");
+        await waitFor(() =>
+            expect(new URL(searchRequestUrls[searchRequestUrls.length - 1]).searchParams.get("workspace")).toBe("2"),
+        );
+        fireEvent.change(screen.getByLabelText("monitor filter"), { target: { value: "1" } });
+        expect(screen.getByLabelText("search query")).toHaveValue("ws:2 monitor:1");
+        await waitFor(() =>
+            expect(new URL(searchRequestUrls[searchRequestUrls.length - 1]).searchParams.get("monitor")).toBe("1"),
+        );
+        const params = new URL(searchRequestUrls[searchRequestUrls.length - 1]).searchParams;
+        expect(params.get("workspace")).toBe("2");
+        expect(params.get("monitor")).toBe("1");
+    });
+
+    it("reflects frame attribute tokens back into the widgets (#63)", async () => {
+        renderSearch();
+        await waitFor(() => expect(screen.getByRole("option", { name: "workspace 2" })).toBeInTheDocument());
+        fireEvent.change(screen.getByLabelText("search query"), { target: { value: "ws:2 fullscreen:no" } });
+        expect(screen.getByRole("button", { name: "windowed" })).toHaveAttribute("aria-pressed", "true");
+        expect(screen.getByLabelText("workspace filter")).toHaveValue("2");
+        fireEvent.change(screen.getByLabelText("monitor filter"), { target: { value: "1" } });
+        expect(screen.getByLabelText("search query")).toHaveValue("ws:2 fullscreen:no monitor:1");
+    });
+
+    it("applies frame attributes to frames only, sessions never match (#63)", async () => {
+        renderSearch();
+        fireEvent.change(screen.getByLabelText("search query"), { target: { value: "ws:2 fullscreen:no" } });
+        await waitFor(() =>
+            expect(new URL(searchRequestUrls[searchRequestUrls.length - 1]).searchParams.get("workspace")).toBe("2"),
+        );
+        // Frames: #3 is workspace 2 but fullscreen; #2/#4 are windowed but ws 1 —
+        // none qualify. Sessions ignore frame attributes entirely.
+        expect(await screen.findByText("Omurice — Uncle Roger")).toBeInTheDocument(); // session ignores frame attrs
+        expect(screen.getByText("Rust borrow checker deep dive")).toBeInTheDocument();
+        expect(screen.queryByText("Heimdall docs")).not.toBeInTheDocument();
+        expect(screen.queryByText("PNG spec")).not.toBeInTheDocument();
+        expect(screen.queryByText("htop")).not.toBeInTheDocument();
+    });
+
+    it("removes frame-attribute chips via the box text (#63)", async () => {
+        renderSearch();
+        fireEvent.change(screen.getByLabelText("search query"), { target: { value: "ws:2 monitor:1 fullscreen:yes" } });
+        expect(await screen.findByRole("button", { name: "remove ws 2 filter" })).toBeInTheDocument();
+        fireEvent.click(screen.getByRole("button", { name: "remove ws 2 filter" }));
+        expect(screen.getByLabelText("search query")).toHaveValue("monitor:1 fullscreen:yes");
+        fireEvent.click(screen.getByRole("button", { name: "remove fullscreen yes filter" }));
+        expect(screen.getByLabelText("search query")).toHaveValue("monitor:1");
     });
 });
