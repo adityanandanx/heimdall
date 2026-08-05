@@ -40,6 +40,8 @@ interface FilmstripProps {
     filterCls: string | null;
     ppm: number;
     onPpmChange: (ppm: number) => void;
+    following: boolean;
+    onToggleFollow: () => void;
 }
 
 interface HoverState {
@@ -48,7 +50,7 @@ interface HoverState {
     y: number;
 }
 
-export function Filmstrip({ baseUrl, frames, sessions, selected, onSelect, onMediaOpen, hits, filterCls, ppm, onPpmChange }: FilmstripProps) {
+export function Filmstrip({ baseUrl, frames, sessions, selected, onSelect, onMediaOpen, hits, filterCls, ppm, onPpmChange, following, onToggleFollow }: FilmstripProps) {
     const axis = useMemo<Span[]>(() => (frames.length > 1 ? buildAxis(frames, ppm) : []), [frames, ppm]);
     const axisW = axisWidth(axis);
 
@@ -60,7 +62,6 @@ export function Filmstrip({ baseUrl, frames, sessions, selected, onSelect, onMed
     const anchorKeepRef = useRef(-1);
     const hoverIdRef = useRef<number | null>(null);
     const [hov, setHov] = useState<HoverState | null>(null);
-    const [followLive, setFollowLive] = useState(false);
     const [viewW, setViewW] = useState(0);
 
     // Track the scroll viewport width so the trailing pad lets the last
@@ -109,25 +110,25 @@ export function Filmstrip({ baseUrl, frames, sessions, selected, onSelect, onMed
     };
 
     // When following live, ride the newest capture by snapping to the end
-    // of the timeline whenever new frames come in.
+    // of the timeline whenever new frames come in or the viewport resizes.
     useLayoutEffect(() => {
-        if (!followLive) return;
+        if (!following) return;
         const el = scrollRef.current;
         if (el) el.scrollLeft = scrollLimit();
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [frames, followLive]);
+    }, [frames, following, viewW, contentW, padEnd]);
 
     // Keep the playhead visible whenever the selection moves — arrow-key
     // scrubbing, search-jump suggestions, jump-to-moment. Skipped while
     // dragging (the pointer already defines the position) and while
     // following live (which rides the newest frame instead).
     useLayoutEffect(() => {
-        if (followLive || draggingRef.current) return;
+        if (following || draggingRef.current) return;
         const el = scrollRef.current;
         if (!el || !axis.length || !selected) return;
         const x = axisOf(axis, selected.ts);
         el.scrollLeft = scrollToPlayhead(x, el.clientWidth, scrollLimit(), el.scrollLeft);
-    }, [selected?.id, axis, contentW, padEnd, followLive]);
+    }, [selected?.id, axis, contentW, padEnd, following]);
 
     // Zoom-anchor: keep the span under the cursor stable across ppm changes.
     useLayoutEffect(() => {
@@ -208,12 +209,12 @@ export function Filmstrip({ baseUrl, frames, sessions, selected, onSelect, onMed
                 )}
                 <button
                     type="button"
-                    onClick={() => setFollowLive((v) => !v)}
-                    aria-pressed={followLive}
+                    onClick={onToggleFollow}
+                    aria-pressed={following}
                     data-testid="follow-live"
                     className={cn(
                         "flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[10px] transition-colors",
-                        followLive
+                        following
                             ? "border-primary/60 text-primary"
                             : "border-line text-dim hover:border-primary/60 hover:text-foreground",
                     )}
@@ -221,7 +222,7 @@ export function Filmstrip({ baseUrl, frames, sessions, selected, onSelect, onMed
                     <span
                         className={cn(
                             "size-1.5 rounded-full",
-                            followLive ? "bg-primary shadow-[0_0_6px_var(--primary)]" : "bg-dim",
+                            following ? "bg-primary shadow-[0_0_6px_var(--primary)]" : "bg-dim",
                         )}
                     />
                     follow

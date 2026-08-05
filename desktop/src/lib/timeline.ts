@@ -116,7 +116,8 @@ const APP_SEMANTIC: Array<{ re: RegExp; color: string }> = [
 
 const APP_PALETTE = ["#5b8cff", "#3ecf8e", "#f0b456", "#c07bff", "#ff7b9c", "#37c2d6", "#b0c2ff"];
 
-export function clsColor(cls: string): string {
+export function clsColor(cls: string | null | undefined): string {
+    cls = cls ?? "";
     for (const { re, color } of APP_SEMANTIC) {
         if (re.test(cls)) return color;
     }
@@ -132,8 +133,8 @@ const PLAYER_COLORS: Record<string, string> = {
     vlc: "#37c2d6",
 };
 
-export function playerColor(player: string): string {
-    return PLAYER_COLORS[player.split(".")[0]] ?? "#5b8cff";
+export function playerColor(player: string | null | undefined): string {
+    return PLAYER_COLORS[(player ?? "").split(".")[0]] ?? "#5b8cff";
 }
 
 export interface WatchSessionLike {

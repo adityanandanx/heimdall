@@ -81,7 +81,8 @@ export interface Session {
 export interface SearchItem {
     id: number;
     ts: string;
-    window_class: string;
+    /** Frames only — session rows carry no window_class. */
+    window_class: string | null;
     window_title: string | null;
     workspace: number | null;
     image_path: string;
@@ -162,17 +163,23 @@ export async function fetchRecentSessions(base: string, days = 7): Promise<Sessi
     );
 }
 
-export function fetchSearch(
+export interface SearchPage {
+    total: number;
+    items: SearchItem[];
+}
+
+/** One /search page (offset/limit slice); the pagination primitive (#61). */
+export function fetchSearchPage(
     base: string,
     params: URLSearchParams,
+    offset: number,
+    limit: number,
     signal?: AbortSignal,
-): Promise<SearchItem[]> {
+): Promise<SearchPage> {
     const full = new URLSearchParams(params);
-    if (!full.has("limit")) full.set("limit", "100");
-    return fetchJson<{ total: number; items: SearchItem[] }>(
-        apiUrl(base, "/search") + `?${full}`,
-        signal,
-    ).then((body) => body.items);
+    full.set("limit", String(limit));
+    full.set("offset", String(offset));
+    return fetchJson<SearchPage>(apiUrl(base, "/search") + `?${full}`, signal);
 }
 
 export interface FacetValue {

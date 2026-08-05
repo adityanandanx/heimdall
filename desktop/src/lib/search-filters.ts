@@ -27,7 +27,7 @@ export interface SearchFilters {
 
 export const DEFAULT_FILTERS: SearchFilters = {
     kind: "all",
-    preset: "all",
+    preset: "today",
     start: "",
     end: "",
     source: "any",
@@ -107,7 +107,11 @@ export function isDefaultFilters(f: SearchFilters): boolean {
 /** Is a search scope active (text ready, or any filter set)? The single gate
  * both the fetch hook and the results grid consume (#58/#59). */
 export function searchActive(f: SearchFilters, q: string): boolean {
-    return q.trim().length >= 2 || !isDefaultFilters(f);
+    if (q.trim().length >= 2) return true;
+    if (!isDefaultFilters(f)) return true;
+    // "all time" is an explicit, broader date scope than the default "today" —
+    // it browses the whole history, it doesn't turn search off (#64).
+    return f.preset === "all";
 }
 
 /** Resolve the custom start/end revealed by the state (dates in, ISOs out). */
@@ -124,7 +128,9 @@ export function dateRangeOf(
     const today = localISO(now).slice(0, 10);
     switch (f.preset) {
         case "today":
-            return { start: dayBoundsISO(today).start, end: localISO(now) };
+            // Whole of today: browse/searching "today" should never exclude
+            // captures that landed a moment ago (end-of-day, not now()).
+            return { start: dayBoundsISO(today).start, end: dayBoundsISO(today).end };
         case "yesterday": {
             const y = shiftDay(today, -1);
             return { start: dayBoundsISO(y).start, end: dayBoundsISO(y).end };
@@ -212,7 +218,7 @@ export function filterItems(f: SearchFilters, items: SearchItem[]): SearchItem[]
     // case-insensitively against what the facet endpoint reports.
     if (hasApps(f)) {
         const wanted = f.apps.map((a) => a.toLowerCase());
-        result = result.filter((i) => i.kind === "session" || wanted.includes(i.window_class.toLowerCase()));
+        result = result.filter((i) => i.kind === "session" || wanted.includes((i.window_class ?? "").toLowerCase()));
     }
     if (hasPlayers(f)) {
         const wanted = f.players.map((p) => p.toLowerCase());

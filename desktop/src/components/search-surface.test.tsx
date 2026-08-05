@@ -44,6 +44,17 @@ describe("SearchSurface", () => {
         expect(mark?.textContent).toBe("roger");
     });
 
+    it("color-tags results by application", async () => {
+        renderSearch();
+        fireEvent.change(screen.getByLabelText("search query"), { target: { value: "roger" } });
+        const playerChip = await screen.findByText("sidra");
+        expect(playerChip).toHaveStyle({ color: "#3ecf8e" });
+
+        fireEvent.change(screen.getByLabelText("search query"), { target: { value: "heimdall" } });
+        const clsChip = await screen.findByText("browser");
+        expect(clsChip).toHaveStyle({ color: "#98c379" });
+    });
+
     it("picks an item on click", async () => {
         const { onPick } = renderSearch();
         fireEvent.change(screen.getByLabelText("search query"), { target: { value: "roger" } });
@@ -58,6 +69,15 @@ describe("SearchSurface", () => {
         expect(await screen.findByText("No matches.")).toBeInTheDocument();
     });
 
+    it("keeps browsing when the all-time preset is selected", async () => {
+        renderSearch();
+        fireEvent.change(screen.getByLabelText("date range preset"), {
+            target: { value: "all" },
+        });
+        expect(await screen.findByText("Heimdall docs")).toBeInTheDocument();
+        expect(screen.getByText("Omurice — Uncle Roger")).toBeInTheDocument();
+    });
+
     it("keeps the filter bar always visible, even idle", () => {
         renderSearch();
         expect(screen.getByRole("group", { name: "kind filter" })).toBeInTheDocument();
@@ -67,10 +87,13 @@ describe("SearchSurface", () => {
         expect(screen.getByLabelText("source type")).toBeInTheDocument();
     });
 
-    it("does not fetch on an idle, unfiltered surface", async () => {
+    it("browses today's scope by default on a blank surface", async () => {
         renderSearch();
-        await new Promise((resolve) => setTimeout(resolve, 350));
-        expect(searchRequestUrls).toHaveLength(0);
+        await waitFor(() => expect(searchRequestUrls).toHaveLength(1));
+        const params = new URL(searchRequestUrls[0]).searchParams;
+        expect(params.has("q")).toBe(false); // browse, not a text query
+        expect(params.get("start")).toBe(dayBoundsISO(localISO(new Date()).slice(0, 10)).start);
+        expect(screen.getByText("Heimdall docs")).toBeInTheDocument();
     });
 
     it("compiles typed tokens into filters and keeps the text as the FTS query", async () => {
@@ -78,6 +101,9 @@ describe("SearchSurface", () => {
         fireEvent.change(screen.getByLabelText("search query"), {
             target: { value: "roger app:sidra" },
         });
+        await waitFor(() =>
+            expect(new URL(searchRequestUrls[searchRequestUrls.length - 1]).searchParams.get("q")).toBe("roger"),
+        );
         expect(await screen.findByText("Omurice — Uncle Roger")).toBeInTheDocument();
         const params = new URL(searchRequestUrls[searchRequestUrls.length - 1]).searchParams;
         expect(params.get("q")).toBe("roger"); // tokens are stripped from the query text
@@ -88,8 +114,8 @@ describe("SearchSurface", () => {
         renderSearch();
         fireEvent.change(screen.getByLabelText("search query"), { target: { value: "app:terminal" } });
         expect(await screen.findByRole("button", { name: "remove terminal filter" })).toBeInTheDocument();
-        await screen.findByText("htop");
-        expect(screen.queryByText("Heimdall docs")).not.toBeInTheDocument();
+        await waitFor(() => expect(screen.queryByText("Heimdall docs")).not.toBeInTheDocument());
+        expect(screen.getByText("htop")).toBeInTheDocument();
         const params = new URL(searchRequestUrls[searchRequestUrls.length - 1]).searchParams;
         expect(params.get("q")).toBeNull();
     });
@@ -171,12 +197,12 @@ describe("SearchSurface", () => {
 
     it("browses newest-first with only a kind filter and no text", async () => {
         renderSearch();
-        const urls = searchRequestUrls;
         fireEvent.click(screen.getByRole("button", { name: "frames" }));
-        expect(await screen.findByText("Heimdall docs")).toBeInTheDocument();
-        expect(urls).toHaveLength(1);
-        expect(new URL(urls[0]).searchParams.has("q")).toBe(false);
-        expect(new URL(urls[0]).searchParams.get("kind")).toBe("frame");
+        await waitFor(() => expect(searchRequestUrls).toHaveLength(2)); // today's browse + kind-filtered
+        expect(screen.queryByText("Heimdall docs")).toBeInTheDocument();
+        const params = new URL(searchRequestUrls[searchRequestUrls.length - 1]).searchParams;
+        expect(params.has("q")).toBe(false);
+        expect(params.get("kind")).toBe("frame");
     });
 
     it("applies the kind filter server-side", async () => {
@@ -207,23 +233,28 @@ describe("SearchSurface", () => {
         expect(screen.getByRole("group", { name: "kind filter" }).textContent).toContain("all");
     });
 
-    it("returns to idle when the last chip is removed with no text", async () => {
+    it("keeps browsing when the date scope is widened to all time", async () => {
         renderSearch();
         fireEvent.click(screen.getByRole("button", { name: "sessions" }));
         await screen.findByText("Omurice — Uncle Roger");
         const requestsAfterBrowse = searchRequestUrls.length;
         fireEvent.click(screen.getByRole("button", { name: "remove sessions filter" }));
-        await waitFor(() => expect(screen.queryByText("Omurice — Uncle Roger")).not.toBeInTheDocument());
-        expect(searchRequestUrls).toHaveLength(requestsAfterBrowse); // no extra fetch
+        // the default today scope keeps the surface browsing — results persist
+        expect(screen.getByText("Omurice — Uncle Roger")).toBeInTheDocument();
+        fireEvent.change(screen.getByLabelText("date range preset"), { target: { value: "all" } });
+        // "all time" is an explicit wider scope, not idle — results stay
+        expect(await screen.findByText("Omurice — Uncle Roger")).toBeInTheDocument();
+        await waitFor(() => expect(searchRequestUrls.length).toBeGreaterThan(requestsAfterBrowse));
     });
 
     it("debounces text and filter changes into one server query", async () => {
         renderSearch();
+        await waitFor(() => expect(searchRequestUrls).toHaveLength(1)); // today's default browse
         fireEvent.change(screen.getByLabelText("search query"), { target: { value: "roger" } });
         fireEvent.change(screen.getByLabelText("source type"), { target: { value: "transcript" } });
         expect(await screen.findByText("watch session")).toBeInTheDocument();
-        expect(searchRequestUrls).toHaveLength(1);
-        const params = new URL(searchRequestUrls[0]).searchParams;
+        expect(searchRequestUrls).toHaveLength(2);
+        const params = new URL(searchRequestUrls[1]).searchParams;
         expect(params.get("q")).toBe("roger");
         expect(params.get("source")).toBe("transcript");
     });
@@ -236,8 +267,10 @@ describe("SearchSurface", () => {
         fireEvent.change(screen.getByLabelText("end time"), {
             target: { value: "2026-08-02T00:00" },
         });
-        await waitFor(() => expect(searchRequestUrls.length).toBeGreaterThan(0));
-        const params = new URL(searchRequestUrls[0]).searchParams;
+        await waitFor(() =>
+            expect(new URL(searchRequestUrls[searchRequestUrls.length - 1]).searchParams.get("start")).toContain("2026-08-01T00:00"),
+        );
+        const params = new URL(searchRequestUrls[searchRequestUrls.length - 1]).searchParams;
         expect(params.get("start")).toContain("2026-08-01T00:00");
         expect(params.get("end")).toContain("2026-08-02T00:00");
         expect(screen.getByText(/08-01 00:00 → 08-02 00:00/)).toBeInTheDocument();
@@ -249,30 +282,35 @@ describe("SearchSurface", () => {
         fireEvent.change(screen.getByLabelText("start time"), {
             target: { value: "2026-08-01T00:00" },
         });
-        await waitFor(() => expect(urls.length).toBeGreaterThan(0));
+        await waitFor(() => expect(urls.length).toBeGreaterThan(1)); // today's browse + the custom range
+        expect(new URL(urls[urls.length - 1]).searchParams.get("start")).toContain("2026-08-01T00:00");
         fireEvent.change(screen.getByLabelText("date range preset"), {
             target: { value: "today" },
         });
-        await waitFor(() => expect(urls.length).toBeGreaterThan(1));
-        const todayStart = dayBoundsISO(localISO(new Date()).slice(0, 10)).start;
-        const params = new URL(urls[urls.length - 1]).searchParams;
-        expect(params.get("start")).toBe(todayStart);
+        // back on the default today scope, which is the cached mount scope: the
+        // custom range is cleared and its stale results are replaced — no refetch
+        await waitFor(() => expect(screen.getByText("Heimdall docs")).toBeInTheDocument());
+        expect(urls).toHaveLength(2);
         expect(screen.getByLabelText("start time")).toHaveValue(""); // custom cleared
         expect(screen.getByRole("button", { name: "remove today filter" })).toBeInTheDocument();
     });
 
     it("waits out the debounce before issuing a request", async () => {
         renderSearch();
+        await waitFor(() => expect(searchRequestUrls).toHaveLength(1)); // today's default browse
         fireEvent.change(screen.getByLabelText("search query"), { target: { value: "roger" } });
         await new Promise((resolve) => setTimeout(resolve, 150));
-        expect(searchRequestUrls).toHaveLength(0); // 150ms < 250ms
+        expect(searchRequestUrls).toHaveLength(1); // 150ms < 250ms
         expect(await screen.findByText("watch session")).toBeInTheDocument();
-        expect(searchRequestUrls).toHaveLength(1);
+        expect(searchRequestUrls).toHaveLength(2);
     });
 
     it("pins the source=a11y|ocr|transcript gates in browse mode", async () => {
         renderSearch();
         fireEvent.change(screen.getByLabelText("source type"), { target: { value: "ocr" } });
+        await waitFor(() =>
+            expect(new URL(searchRequestUrls[searchRequestUrls.length - 1]).searchParams.get("source")).toBe("ocr"),
+        );
         expect(await screen.findByText("PNG spec")).toBeInTheDocument();
         expect(screen.queryByText("Heimdall docs")).not.toBeInTheDocument();
         fireEvent.change(screen.getByLabelText("source type"), { target: { value: "a11y" } });
@@ -335,7 +373,10 @@ describe("SearchSurface", () => {
     it("renders an empty state for empty facet lists", async () => {
         renderSearch();
         fireEvent.change(screen.getByLabelText("search query"), { target: { value: "zzzznothing" } });
-        await screen.findByText("No matches.");
+        await waitFor(() =>
+            expect(new URL(searchRequestUrls[searchRequestUrls.length - 1]).searchParams.get("q")).toBe("zzzznothing"),
+        );
+        expect(await screen.findByText("No matches.")).toBeInTheDocument();
         fireEvent.click(screen.getByRole("button", { name: /^app/ }));
         expect(await screen.findByText("No apps.")).toBeInTheDocument();
         fireEvent.click(screen.getByRole("button", { name: /^player/ }));
@@ -360,13 +401,14 @@ describe("SearchSurface", () => {
         renderSearch();
         fireEvent.change(screen.getByLabelText("search query"), { target: { value: "roger" } });
         fireEvent.change(screen.getByLabelText("search query"), { target: { value: "zzzznothing" } });
+        await waitFor(() =>
+            expect(new URL(searchRequestUrls[searchRequestUrls.length - 1]).searchParams.get("q")).toBe("zzzznothing"),
+        );
         expect(await screen.findByText("No matches.")).toBeInTheDocument();
         expect(screen.queryByText("Omurice — Uncle Roger")).not.toBeInTheDocument();
         fireEvent.click(screen.getByRole("button", { name: /^app/ }));
         expect(await screen.findByText("No apps.")).toBeInTheDocument();
         expect(screen.queryByRole("checkbox", { name: "app browser" })).not.toBeInTheDocument();
-        expect(new URL(searchRequestUrls[searchRequestUrls.length - 1]).searchParams.get("q"))
-            .toBe("zzzznothing");
     });
 
     it("ignores a late response for an outdated scope", async () => {
@@ -379,7 +421,9 @@ describe("SearchSurface", () => {
         expect(screen.queryByText("Omurice — Uncle Roger")).not.toBeInTheDocument();
         fireEvent.click(screen.getByRole("button", { name: /^app/ }));
         expect(await screen.findByText("No apps.")).toBeInTheDocument();
-        expect(new URL(searchRequestUrls[searchRequestUrls.length - 1]).searchParams.get("q"))
-            .toBe("zzzznothing");
+        await waitFor(() =>
+            expect(new URL(searchRequestUrls[searchRequestUrls.length - 1]).searchParams.get("q"))
+                .toBe("zzzznothing"),
+        );
     });
 });

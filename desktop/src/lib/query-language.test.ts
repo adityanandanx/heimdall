@@ -151,9 +151,15 @@ describe("applyQueryTokens", () => {
     });
 
     it("leaves a bare time without day context in the text query", () => {
-        const out = applyQueryTokens(F(), parseQuery("after:09:30 roger"), NOW);
+        const out = applyQueryTokens(F({ preset: "all" }), parseQuery("after:09:30 roger"), NOW);
         expect(out.filters.start).toBe("");
         expect(out.text).toBe("roger after:09:30");
+    });
+
+    it("binds a bare time to the default today scope", () => {
+        const out = applyQueryTokens(F(), parseQuery("after:09:30 roger"), NOW);
+        expect(out.filters.start).toBe("2026-06-05T09:30");
+        expect(out.text).toBe("roger");
     });
 
     it("drops recognized but inexpressible negations from the text", () => {

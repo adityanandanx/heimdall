@@ -1,21 +1,26 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useState } from "react";
 import {
     fetchDayFrames,
     fetchDaySessions,
     fetchFacets,
     fetchRecentSessions,
-    fetchSearch,
+    fetchSearchPage,
     runPipe,
     type PipeRunResult,
 } from "@/lib/api";
 
-export function useDayFrames(baseUrl: string, day: string) {
+export function useDayFrames(
+    baseUrl: string,
+    day: string,
+    refetchIntervalMs: number | false = false,
+) {
     return useQuery({
         queryKey: ["day-frames", baseUrl, day],
         queryFn: () => fetchDayFrames(baseUrl, day),
         enabled: !!baseUrl && !!day,
         refetchOnWindowFocus: false,
+        refetchInterval: refetchIntervalMs || false,
     });
 }
 
@@ -47,13 +52,23 @@ export function useDebouncedValue<T>(value: T, delayMs: number): T {
     return debounced;
 }
 
+export const SEARCH_PAGE_SIZE = 100;
+
 export function useSearch(baseUrl: string, params: URLSearchParams, active: boolean) {
     // `active` is the same searchActive(f, q) gate the component renders with,
     // debounced; it covers client-side app/player filters that leave no
-    // server params behind (#59).
-    return useQuery({
-        queryKey: ["search", baseUrl, params.toString()],
-        queryFn: ({ signal }) => fetchSearch(baseUrl, params, signal),
+    // server params behind (#59). Offset pages are disjoint per scope, so
+    // appending never duplicates; a scope change resets to page 0 (#61).
+    return useInfiniteQuery({
+        queryKey: ["search-pages", baseUrl, params.toString()],
+        queryFn: ({ pageParam, signal }) =>
+            fetchSearchPage(baseUrl, params, pageParam, SEARCH_PAGE_SIZE, signal),
+        initialPageParam: 0,
+        getNextPageParam: (lastPage, allPages) => {
+            const loaded = allPages.reduce((n, p) => n + p.items.length, 0);
+            if (lastPage.items.length === 0 || loaded >= lastPage.total) return undefined;
+            return loaded;
+        },
         enabled: !!baseUrl && active,
         staleTime: 30_000,
         refetchOnWindowFocus: false,

@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils";
 interface FacetDropdownProps {
     label: string;
     options: FacetValue[];
+    pending?: boolean;
     selected: string[];
     onToggle: (value: string) => void;
     onClear: () => void;
@@ -13,10 +14,13 @@ interface FacetDropdownProps {
 
 /** Multi-select dropdown of faceted values with counts (#59). Closes on
  * outside click; results are served by the parent's query cache (scoped),
- * so opening never waits for a fetch. */
+ * so opening never waits for a fetch. While the current scope's counts are
+ * still loading we hold the empty state, so "No {label}s." only appears for
+ * a genuinely empty response (never for an in-flight request). */
 export function FacetDropdown({
     label,
     options,
+    pending = false,
     selected,
     onToggle,
     onClear,
@@ -55,9 +59,11 @@ export function FacetDropdown({
 
             {open && (
                 <div className="absolute top-full left-0 z-20 mt-1 max-h-64 w-60 overflow-y-auto rounded-md border border-line bg-surface shadow-xl">
-                    {options.length === 0 && (
+                    {pending && options.length === 0 ? (
+                        <p className="px-2 py-1.5 text-[11px] text-faint">loading…</p>
+                    ) : options.length === 0 ? (
                         <p className="px-2 py-1.5 text-[11px] text-faint">No {label}s.</p>
-                    )}
+                    ) : null}
                     {options.map((option) => {
                         const checked = selected.includes(option.value);
                         return (

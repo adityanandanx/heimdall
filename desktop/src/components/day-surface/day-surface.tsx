@@ -23,18 +23,26 @@ type Suggestion =
     | { kind: "frame"; frame: Frame; ts: number; title: string; sub: string }
     | { kind: "session"; session: Session; ts: number; title: string; sub: string };
 
+/** Follow-live poll cadence for today's frames (ms). */
+const FOLLOW_POLL_MS = 15_000;
+
 export function DaySurface({ baseUrl, day, onDayChange, onOpenSearch, seek, onSeekDone }: DaySurfaceProps) {
     const [ppm, setPpm] = useState(14);
     const [selected, setSelected] = useState<Frame | null>(null);
     const [filterCls, setFilterCls] = useState<string | null>(null);
     const [dayQuery, setDayQuery] = useState("");
+    const [followLive, setFollowLive] = useState(false);
     const [mediaPopup, setMediaPopup] = useState<Session[] | null>(null);
     const [suggestFocused, setSuggestFocused] = useState(false);
     const [activeSugg, setActiveSugg] = useState(-1);
     const searchRef = useRef<HTMLInputElement>(null);
     const userSelectedRef = useRef(false);
 
-    const framesQ = useDayFrames(baseUrl, day);
+    const framesQ = useDayFrames(
+        baseUrl,
+        day,
+        followLive && day === dayStrOf(new Date()) ? FOLLOW_POLL_MS : false,
+    );
     const sessionsQ = useDaySessions(baseUrl, day);
     const statusQ = useStatus(baseUrl);
     const recap = useRunPipe(baseUrl, day);
@@ -72,6 +80,7 @@ export function DaySurface({ baseUrl, day, onDayChange, onOpenSearch, seek, onSe
         const q = dayQuery.trim().toLowerCase();
         if (q.length < 2) return [];
         const out: Suggestion[] = [];
+        const seenTitles = new Set<string>();
         for (const f of frames) {
             if (out.length >= 5) break;
             const hit = frameMatchText(f, q);
@@ -88,11 +97,14 @@ export function DaySurface({ baseUrl, day, onDayChange, onOpenSearch, seek, onSe
             if (out.length >= 8) break;
             const text = `${s.media_title ?? ""} ${s.transcript ?? ""}`.toLowerCase();
             if (!text.includes(q)) continue;
+            const title = s.media_title ?? s.player;
+            if (seenTitles.has(title)) continue;
+            seenTitles.add(title);
             out.push({
                 kind: "session",
                 session: s,
                 ts: new Date(s.ts_start).getTime(),
-                title: s.media_title ?? s.player,
+                title,
                 sub: s.media_title
                     ? `${s.player} · ${snippetOf(s.media_title, q)}`
                     : `${s.player} · ${snippetOf(s.transcript ?? "", q)}`,
@@ -381,6 +393,8 @@ export function DaySurface({ baseUrl, day, onDayChange, onOpenSearch, seek, onSe
                         filterCls={filterCls}
                         ppm={ppm}
                         onPpmChange={setPpm}
+                        following={followLive}
+                        onToggleFollow={() => setFollowLive((v) => !v)}
                     />
                 </div>
 

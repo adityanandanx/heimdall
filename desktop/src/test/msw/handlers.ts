@@ -98,18 +98,18 @@ export const sessionFixtures = [
         id: 21,
         player: "sidra",
         media_title: "Omurice — Uncle Roger",
-        media_source: null,
-        media_id: null,
+        media_source: "https://www.youtube.com/watch?v=omurice123",
+        media_id: "omurice123",
         ts_start: localISO(at(10, 0)),
-        ts_end: localISO(at(11, 30)),
-        pos_start: 100.5,
-        pos_end: 2600,
-        length: 2500,
-        ranges: [[1000000, 8000000], [45000000, 70000000]],
+        ts_end: localISO(at(13, 50)),
+        pos_start: 100000000,
+        pos_end: 1050000000,
+        length: 2150000000,
+        ranges: [[5000000, 8000000], [45000000, 70000000]],
         live: 0,
         cues_json: JSON.stringify([
-            { t: 120, text: "the most difficult omelet" },
-            { t: 900, text: "fuiyoh" },
+            { start_ms: 120000, end_ms: 125000, text: "the most difficult omelet" },
+            { start_ms: 900000, end_ms: 900800, text: "fuiyoh" },
         ]),
         transcript: "Fuiyoh! He say uncle roger review the most difficult omelet...",
         transcript_source: "whisper",
@@ -118,8 +118,8 @@ export const sessionFixtures = [
         id: 22,
         player: "chromium",
         media_title: "Some dev video",
-        media_source: null,
-        media_id: null,
+        media_source: "https://www.youtube.com/watch?v=devlive456",
+        media_id: "devlive456",
         ts_start: localISO(at(12, 0)),
         ts_end: null,
         pos_start: 0,
@@ -127,6 +127,42 @@ export const sessionFixtures = [
         length: null,
         ranges: [[1000000, 3000000]],
         live: 1,
+        cues_json: null,
+        transcript: null,
+        transcript_source: null,
+    },
+    {
+        id: 24,
+        player: "sidra",
+        media_title: "Omurice — Uncle Roger",
+        media_source: "https://www.youtube.com/watch?v=omurice123",
+        media_id: "omurice123",
+        ts_start: localISO(at(13, 20)),
+        ts_end: localISO(at(13, 40)),
+        pos_start: 55000000,
+        pos_end: 80000000,
+        length: 2150000000,
+        ranges: [[60000000, 85000000]],
+        live: 0,
+        cues_json: JSON.stringify([
+            { start_ms: 600000, end_ms: 600800, text: "fuiyoh so good" },
+        ]),
+        transcript: "fuiyoh so good",
+        transcript_source: "whisper",
+    },
+    {
+        id: 25,
+        player: "vlc",
+        media_title: "local film.mkv",
+        media_source: null,
+        media_id: null,
+        ts_start: localISO(at(14, 0)),
+        ts_end: localISO(at(15, 30)),
+        pos_start: 1000000,
+        pos_end: 30000000,
+        length: 1800000000,
+        ranges: [[1000000, 30000000]],
+        live: 0,
         cues_json: null,
         transcript: null,
         transcript_source: null,
@@ -170,7 +206,7 @@ export const searchFixtures = [
     {
         id: 21,
         ts: localISO(at(10, 0)),
-        window_class: "sidra",
+        window_class: null,
         window_title: "Omurice — Uncle Roger",
         workspace: 1,
         image_path: "",
@@ -182,7 +218,7 @@ export const searchFixtures = [
     {
         id: 23,
         ts: localISO(at(13, 0)),
-        window_class: "vlc",
+        window_class: null,
         window_title: "Rust borrow checker deep dive",
         workspace: 1,
         image_path: "",
@@ -194,6 +230,10 @@ export const searchFixtures = [
 ];
 
 type SearchFixture = (typeof searchFixtures)[number];
+
+/** Extra search fixtures tests can push for pagination coverage (#61); the
+ * /search handler pages over both fixture arrays. Reset in afterEach. */
+export const searchFixtureExtras: SearchFixture[] = [];
 
 // Which text source each search fixture won by, for the source= filter.
 const searchSources: Record<number, "a11y" | "ocr" | "session"> = {
@@ -216,6 +256,9 @@ let searchResponseDelayMs = 0;
 export function setSearchResponseDelay(ms: number) {
     searchResponseDelayMs = ms;
 }
+
+/** Every /frames request the UI made this session, for tests. */
+export const frameRequestUrls: string[] = [];
 
 export const pipesPayload = {
     "day-recap": {
@@ -250,6 +293,7 @@ export const handlers = [
     http.get(`${base}/health`, () => HttpResponse.json(healthPayload)),
     http.get(`${base}/status`, () => HttpResponse.json(statusPayload)),
     http.get(`${base}/frames`, ({ request }) => {
+        frameRequestUrls.push(request.url);
         const url = new URL(request.url);
         const start = url.searchParams.get("start");
         const end = url.searchParams.get("end");
@@ -285,7 +329,9 @@ export const handlers = [
         const source = url.searchParams.get("source");
         const start = url.searchParams.get("start");
         const end = url.searchParams.get("end");
-        let items = searchFixtures.filter((s) =>
+        const offset = Number(url.searchParams.get("offset") ?? 0);
+        const limit = Number(url.searchParams.get("limit") ?? 100);
+        let items = [...searchFixtures, ...searchFixtureExtras].filter((s) =>
             (s.snippet + s.window_class + (s.window_title ?? "")).toLowerCase().includes(q),
         );
         if (kind === "frame") items = items.filter((s) => s.kind === "frame");
@@ -296,7 +342,8 @@ export const handlers = [
         if (start) items = items.filter((s) => s.ts >= start);
         if (end) items = items.filter((s) => s.ts <= end);
         items = [...items].sort((a, b) => (a.ts < b.ts ? 1 : a.ts > b.ts ? -1 : 0));
-        return HttpResponse.json({ total: items.length, items });
+        const page = items.slice(offset, offset + limit);
+        return HttpResponse.json({ total: items.length, items: page });
     }),
     http.get(`${base}/search/facets`, ({ request }) => {
         const url = new URL(request.url);
@@ -323,8 +370,8 @@ export const handlers = [
         };
         const scoped = searchFixtures.filter(inScope);
         return HttpResponse.json({
-            apps: topFacets(scoped.filter((s) => s.kind === "frame"), (s) => s.window_class),
-            players: topFacets(scoped.filter((s) => s.kind === "session"), (s) => s.player ?? s.window_class),
+            apps: topFacets(scoped.filter((s) => s.kind === "frame"), (s) => s.window_class ?? ""),
+            players: topFacets(scoped.filter((s) => s.kind === "session"), (s) => s.player ?? s.window_class ?? ""),
         });
     }),
     http.post(`${base}/pipes/run/:name`, ({ params }) => {

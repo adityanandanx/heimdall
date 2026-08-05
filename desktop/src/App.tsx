@@ -9,7 +9,7 @@ import { StatusSurface } from "@/components/status-surface";
 import { SettingsSurface } from "@/components/settings-surface";
 import { dayStrOf } from "@/lib/timeline";
 import { useHealth } from "@/hooks/use-day-browser";
-import type { SearchItem, Session } from "@/lib/api";
+import type { SearchItem } from "@/lib/api";
 
 const LS_REFRESH = "heimdall.refreshSeconds";
 
@@ -91,12 +91,7 @@ function App() {
                     />
                 );
             case "sessions":
-                return (
-                    <SessionsSurface
-                        baseUrl={serverUrl}
-                        onJump={(s: Session) => jumpTo(new Date(s.ts_start).getTime())}
-                    />
-                );
+                return <SessionsSurface baseUrl={serverUrl} />;
             case "status":
                 return <StatusSurface baseUrl={serverUrl} />;
             case "settings":

@@ -3,7 +3,8 @@ import type { SearchItem } from "@/lib/api";
 import { frameImageUrl } from "@/lib/api";
 import { relTime } from "@/lib/format";
 import { srcOf } from "@/lib/frames";
-import { dayStrOf } from "@/lib/timeline";
+import { dayStrOf, clsColor, playerColor } from "@/lib/timeline";
+import { AppChip } from "@/components/app-chip";
 import {
     activeChips,
     compileSearchParams,
@@ -88,8 +89,38 @@ export function SearchSurface({ baseUrl, focusNonce, seed, onPick }: SearchSurfa
     // an inconsistent intermediate state (spurious browse fetches).
     const scope = useMemo(() => ({ params, active }), [params, active]);
     const debounced = useDebouncedValue(scope, 250);
-    const { data, isFetching } = useSearch(baseUrl, debounced.params, debounced.active);
-    const { data: facets } = useFacets(baseUrl, debounced.params);
+    const {
+        data: searchPages,
+        isFetching,
+        isFetchingNextPage,
+        hasNextPage,
+        fetchNextPage,
+        isError,
+    } = useSearch(baseUrl, debounced.params, debounced.active);
+    const { data: facets, isPending: facetsPending } = useFacets(baseUrl, debounced.params);
+    const sentinelRef = useRef<HTMLDivElement>(null);
+
+    const items = useMemo(() => (searchPages?.pages ?? []).flatMap((p) => p.items), [searchPages]);
+    const total = searchPages?.pages[0]?.total ?? 0;
+    const loadingMore = isFetchingNextPage || isFetching;
+    const loadMore = () => {
+        if (!loadingMore && hasNextPage) void fetchNextPage();
+    };
+
+    // Bottom sentinel: load the next page as the user scrolls near it; the
+    // load-more button stays as the deterministic fallback (#61).
+    useEffect(() => {
+        const el = sentinelRef.current;
+        if (!el || !hasNextPage || !("IntersectionObserver" in window)) return;
+        const observer = new IntersectionObserver(
+            (entries) => {
+                if (entries[0]?.isIntersecting && !loadingMore && !isError) loadMore();
+            },
+            { rootMargin: "600px" },
+        );
+        observer.observe(el);
+        return () => observer.disconnect();
+    }, [hasNextPage, loadingMore, isError]);
 
     // Autofocus when the surface opens (or is summoned with ⌘K).
     useEffect(() => {
@@ -142,8 +173,8 @@ export function SearchSurface({ baseUrl, focusNonce, seed, onPick }: SearchSurfa
     const showResults = active;
     // Client-side app/player membership (the API params are single-valued).
     const filtered = useMemo(
-        () => (data ? filterItems(filters, data) : data),
-        [data, filters],
+        () => (items ? filterItems(filters, items) : items),
+        [items, filters],
     );
 
     return (
@@ -239,6 +270,7 @@ export function SearchSurface({ baseUrl, focusNonce, seed, onPick }: SearchSurfa
                 <FacetDropdown
                     label="app"
                     options={facets?.apps ?? []}
+                    pending={facetsPending}
                     selected={filters.apps}
                     onToggle={(value) => toggleTextValue("app", value)}
                     onClear={() => setText(removeOpTokens(q, "app"))}
@@ -247,6 +279,7 @@ export function SearchSurface({ baseUrl, focusNonce, seed, onPick }: SearchSurfa
                 <FacetDropdown
                     label="player"
                     options={facets?.players ?? []}
+                    pending={facetsPending}
                     selected={filters.players}
                     onToggle={(value) => toggleTextValue("player", value)}
                     onClear={() => setText(removeOpTokens(q, "player"))}
@@ -272,13 +305,37 @@ export function SearchSurface({ baseUrl, focusNonce, seed, onPick }: SearchSurfa
             )}
 
             {showResults && (
-                <div className="grid grid-cols-[repeat(auto-fill,minmax(240px,1fr))] items-start gap-3">
-                    {(filtered ?? []).map((item) => (
-                        <ResultCard key={`${item.kind}-${item.id}`} item={item} query={query} baseUrl={baseUrl} onPick={onPick} />
-                    ))}
-                    {filtered && filtered.length === 0 && (
-                        <p className="col-span-full text-xs text-dim">No matches.</p>
+                <div className="flex flex-col gap-3">
+                    <div className="grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] items-start gap-3">
+                        {(filtered ?? []).map((item) => (
+                            <ResultCard key={`${item.kind}-${item.id}`} item={item} query={query} baseUrl={baseUrl} onPick={onPick} />
+                        ))}
+                        {filtered && filtered.length === 0 && (
+                            <p className="col-span-full text-xs text-dim">No matches.</p>
+                        )}
+                    </div>
+                    {total > 0 && (filtered?.length ?? 0) > 0 && (
+                        <div
+                            className="flex items-center gap-2 text-[11px] text-dim"
+                            aria-label="pagination"
+                        >
+                            <span>
+                                showing {filtered!.length.toLocaleString()} of {total.toLocaleString()}
+                            </span>
+                            {hasNextPage && (
+                                <button
+                                    type="button"
+                                    onClick={loadMore}
+                                    disabled={loadingMore}
+                                    aria-label="load more"
+                                    className="rounded-full border border-line px-2.5 py-0.5 text-[10px] text-primary transition-colors hover:border-primary disabled:opacity-50"
+                                >
+                                    {isFetchingNextPage ? "…" : isError ? "load more · retry" : "load more"}
+                                </button>
+                            )}
+                        </div>
                     )}
+                    <div ref={sentinelRef} aria-hidden className="h-px" />
                 </div>
             )}
         </div>
@@ -311,7 +368,7 @@ function ResultCard({
             onClick={() => onPick(item)}
             className="flex flex-col overflow-hidden rounded-md border border-line bg-surface text-left transition-colors hover:border-primary"
         >
-            <div className="flex h-14 w-full shrink-0 items-center justify-center border-b border-line bg-[linear-gradient(135deg,var(--surface-2),var(--surface))] text-[10px] text-faint">
+            <div className="flex aspect-video w-full shrink-0 items-center justify-center overflow-hidden border-b border-line bg-[linear-gradient(135deg,var(--surface-2),var(--surface))] text-[10px] text-faint">
                 {item.kind === "frame" ? (
                     <img
                         src={frameImageUrl(baseUrl, item.id)}
@@ -323,12 +380,12 @@ function ResultCard({
                     <span>session</span>
                 )}
             </div>
-            <div className="flex min-w-0 flex-col gap-1.5 p-3 pt-2">
-                <div className="flex h-4 items-center gap-1.5">
-                    <span className="shrink-0 font-mono text-[11px] text-faint">{relTime(item.ts)}</span>
+            <div className="flex min-w-0 flex-col gap-2 p-4 pt-2.5">
+                <div className="flex h-5 items-center gap-1.5">
+                    <span className="shrink-0 font-mono text-xs text-faint">{relTime(item.ts)}</span>
                     <span
                         className={cn(
-                            "shrink-0 rounded-full border px-1.5 py-px text-[9px] tracking-wide",
+                            "shrink-0 rounded-full border px-1.5 py-px text-[10px] tracking-wide",
                             source === "a11y" && "border-ok/40 text-ok",
                             source === "ocr" && "border-primary/40 text-primary",
                             source === "session" && "border-line text-dim",
@@ -336,12 +393,19 @@ function ResultCard({
                     >
                         {source === "a11y" ? "a11y tree" : source === "ocr" ? "ocr" : source === "session" ? "session" : "no text"}
                     </span>
-                    <span className="ml-auto shrink-0 font-mono text-[11px] text-dim">{item.window_class}</span>
+                    <span className="ml-auto flex shrink-0 items-center gap-1">
+                        {item.player && (
+                            <AppChip label={item.player} color={playerColor(item.player)} />
+                        )}
+                        {item.window_class && (
+                            <AppChip label={item.window_class} color={clsColor(item.window_class)} />
+                        )}
+                    </span>
                 </div>
-                <p className="min-w-0 text-xs leading-snug break-words text-dim">
+                <p className="line-clamp-2 min-w-0 text-[13px] leading-snug break-words text-dim">
                     <Highlighted text={item.snippet} query={query} />
                 </p>
-                <div className="flex min-w-0 items-center gap-2 text-[10px] text-faint">
+                <div className="flex min-w-0 items-center gap-2 text-[11px] text-faint">
                     <b className="min-w-0 truncate font-semibold text-dim">
                         {item.window_title ?? item.window_class}
                     </b>
