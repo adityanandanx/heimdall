@@ -99,39 +99,53 @@ def health(state: Any = Depends(_state)) -> dict:
 @search_router.get("/search")
 def search(
     state: Any = Depends(_state),
-    q: str = Query(..., min_length=1),
+    q: str | None = Query(None, max_length=500),
     kind: Literal["frame", "session"] | None = Query(None),
     window_class: str | None = None,
     player: str | None = None,
+    workspace: int | None = Query(None, ge=0),
+    monitor: int | None = Query(None, ge=0),
+    fullscreen: bool | None = None,
+    source: Literal["a11y", "ocr", "transcript"] | None = None,
+    sort: Literal["score", "ts"] = Query("ts"),
     start: str | None = None,
     end: str | None = None,
     limit: int = Query(DEFAULT_LIMIT, ge=1),
     offset: int = Query(0, ge=0),
 ) -> dict:
-    """Merged full-text search over frames (a11y/OCR/title) and watch sessions
+    """Merged search over frames (a11y/OCR/title) and watch sessions
     (media title/source), with `kind: frame|session` on every item (#37).
 
-    `kind=frame` and `kind=session` filter to one surface; the default mixes
-    both into a single newest-first timeline. bm25 is scored per surface.
-    Invalid FTS5 syntax is a 422, matching the single-surface behavior.
+    `q` is optional (#56): without it the surfaces are browsed as a plain
+    filtered scan, newest-first (`sort=ts`, the default). With a query, bm25
+    is scored per surface; `sort=score` merges both surfaces by score.
+
+    Frame-only filters (workspace/monitor/fullscreen/source=a11y|ocr) are
+    ignored by the session surface; `source=transcript` is the session-side
+    gate and a no-op for frames. Invalid FTS5 syntax is a 422.
     """
     limit, offset = _paginate(limit, offset)
+    q = q.strip() if q else None
     start_ms = _parse_time(start, "start")
     end_ms = _parse_time(end, "end")
     try:
         if kind == "session":
             total, items = state.db.search_watch_sessions(
-                q, player=player, start=start_ms, end=end_ms,
-                limit=limit, offset=offset)
+                q, player=player, source=source, start=start_ms, end=end_ms,
+                limit=limit, offset=offset, order=sort)
             items = _session_iso(items)
         elif kind == "frame":
             total, items = state.db.search(
-                q, window_class=window_class, start=start_ms, end=end_ms,
-                limit=limit, offset=offset)
+                q, window_class=window_class, workspace=workspace,
+                monitor=monitor, fullscreen=fullscreen, source=source,
+                start=start_ms, end=end_ms, limit=limit, offset=offset,
+                order=sort)
             items = _iso(items)
         else:
             total, items = _merge_search(state, q, window_class, player,
-                                         start_ms, end_ms, limit, offset)
+                                         workspace, monitor, fullscreen,
+                                         source, start_ms, end_ms,
+                                         limit, offset, sort)
     except sqlite3.OperationalError as exc:
         raise HTTPException(status_code=422, detail=f"invalid search query: {exc}")
     for it in items:
@@ -139,23 +153,35 @@ def search(
     return {"total": total, "items": items}
 
 
-def _merge_search(state: Any, q: str, window_class: str | None, player: str | None,
-                  start_ms: int | None, end_ms: int | None,
-                  limit: int, offset: int) -> tuple[int, list[dict]]:
-    """Both surfaces, newest-first, tagged by kind (#37).
+def _merge_search(state: Any, q: str | None, window_class: str | None,
+                  player: str | None, workspace: int | None,
+                  monitor: int | None, fullscreen: bool | None,
+                  source: str | None, start_ms: int | None, end_ms: int | None,
+                  limit: int, offset: int, sort: str) -> tuple[int, list[dict]]:
+    """Both surfaces in one timeline, tagged by kind (#37).
 
-    Each surface is fetched with `offset + limit` rows already sorted newest-
-    first, then merged and re-sliced so pagination stays correct across kinds.
+    Each surface is fetched with `offset + limit` rows already sorted, then
+    merged and re-sliced so pagination stays correct across kinds.
+    `sort="score"` interleaves by bm25 score (ties broken newest-first);
+    `sort="ts"` is the newest-first merge. In browse mode (no `q`) scores are
+    all 0, so score sort degrades to newest-first too.
     """
+    order = "ts" if sort == "ts" else "score"
     frame_total, frames = state.db.search(
-        q, window_class=window_class, start=start_ms, end=end_ms,
-        limit=limit + offset, offset=0, order="ts")
+        q, window_class=window_class, workspace=workspace, monitor=monitor,
+        fullscreen=fullscreen, source=source, start=start_ms, end=end_ms,
+        limit=limit + offset, offset=0, order=order)
     sess_total, sessions = state.db.search_watch_sessions(
-        q, player=player, start=start_ms, end=end_ms,
-        limit=limit + offset, offset=0, order="ts")
-    pairs = [(f["ts"], f) for f in frames] + [(s["ts_start"], s) for s in sessions]
-    pairs.sort(key=lambda p: p[0], reverse=True)
-    items = [it for _, it in pairs[offset:offset + limit]]
+        q, player=player, source=source, start=start_ms, end=end_ms,
+        limit=limit + offset, offset=0, order=order)
+    if sort == "score":
+        pairs = [(-f["score"], -f["ts"], f) for f in frames]
+        pairs += [(-s["score"], -s["ts_start"], s) for s in sessions]
+    else:
+        pairs = [(-f["ts"], 0, f) for f in frames]
+        pairs += [(-s["ts_start"], 0, s) for s in sessions]
+    pairs.sort()
+    items = [it for _, _, it in pairs[offset:offset + limit]]
     _iso([it for it in items if "ts_start" not in it])
     _session_iso([it for it in items if "ts_start" in it])
     return frame_total + sess_total, items

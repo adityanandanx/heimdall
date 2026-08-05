@@ -66,7 +66,14 @@ def test_search_ts_is_iso8601_with_tz(api_client: TestClient):
 
 
 def test_search_requires_q(api_client: TestClient):
-    assert api_client.get("/search").status_code == 422
+    """#56: q became optional — no query browses everything, newest-first."""
+    r = api_client.get("/search")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["total"] == 8
+    assert [it["kind"] for it in body["items"]] == ["frame"] * 8
+    ts = [datetime.fromisoformat(it["ts"]) for it in body["items"]]
+    assert ts == sorted(ts, reverse=True)
 
 
 def test_search_invalid_query(api_client: TestClient):
@@ -195,6 +202,97 @@ def test_search_merged_pagination(api_client: TestClient, db):
     page2 = api_client.get("/search", params={"q": "inception", "limit": 1, "offset": 1}).json()
     assert page2["total"] == 2
     assert [it["kind"] for it in page2["items"]] == ["frame"]
+
+
+# ---- /search: rich filters + browse mode (#56) ----
+
+def test_search_browse_mode_filters(api_client: TestClient):
+    """No text + filters = a plain filtered scan (browse mode)."""
+    body = api_client.get("/search", params={"window_class": "firefox"}).json()
+    assert body["total"] == 3
+    assert {it["window_class"] for it in body["items"]} == {"firefox"}
+
+
+def test_search_browse_mode_merges_kinds(api_client: TestClient, db):
+    start_ms, _ = day_bounds(FIXTURE_DAY)
+    _insert_session(db, title="Inception (2010)", wall_ms=start_ms + 95 * 60_000)
+    body = api_client.get("/search").json()
+    assert body["total"] == 9
+    assert [it["kind"] for it in body["items"][:3]] == ["session", "frame", "frame"]
+
+
+def test_search_browse_mode_pagination(api_client: TestClient):
+    body = api_client.get("/search", params={"limit": 5, "offset": 3}).json()
+    assert body["total"] == 8
+    assert len(body["items"]) == 5
+    ids = [it["id"] for it in body["items"]]
+    assert ids == sorted(ids, reverse=True)  # newest-first, sliced
+
+
+def test_search_workspace_monitor_fullscreen_filters(api_client: TestClient):
+    assert api_client.get("/search", params={"workspace": 2}).json()["total"] == 8
+    assert api_client.get("/search", params={"workspace": 9}).json()["total"] == 0
+    assert api_client.get("/search", params={"monitor": 0}).json()["total"] == 8
+    assert api_client.get("/search", params={"monitor": 1}).json()["total"] == 0
+    assert api_client.get("/search", params={"fullscreen": True}).json()["total"] == 0
+    assert api_client.get("/search", params={"fullscreen": False}).json()["total"] == 8
+
+
+def test_search_source_filters(api_client: TestClient):
+    """source=a11y|ocr restricts frames to the text column that won."""
+    a11y = api_client.get("/search", params={"source": "a11y", "kind": "frame"}).json()
+    assert a11y["total"] == 3
+    assert all(it["snippet"] for it in a11y["items"])  # snippet falls back to the plain text
+    ocr = api_client.get("/search", params={"source": "ocr", "kind": "frame"}).json()
+    assert ocr["total"] == 4
+    assert all(it["snippet"] for it in ocr["items"])
+
+
+def test_search_source_transcript_gates_sessions(api_client: TestClient, db):
+    """source=transcript keeps only sessions with a transcript attached."""
+    start_ms, _ = day_bounds(FIXTURE_DAY)
+    sid = _insert_session(db, title="checkpointers deep dive", wall_ms=start_ms + 10 * 60_000)
+    before = api_client.get("/search", params={
+        "q": "checkpointers", "kind": "session", "source": "transcript",
+    }).json()
+    assert before["total"] == 0
+    db.update_session_transcript(
+        sid, cues_json=None,
+        transcript="deep dive into checkpointers and memory", transcript_source="asr")
+    after = api_client.get("/search", params={
+        "q": "checkpointers", "kind": "session", "source": "transcript",
+    }).json()
+    assert after["total"] == 1
+    assert after["items"][0]["id"] == sid
+    # a11y/ocr are no-ops for sessions: the session still matches without them
+    plain = api_client.get("/search", params={
+        "q": "checkpointers", "kind": "session", "source": "a11y",
+    }).json()
+    assert plain["total"] == 1
+
+
+def test_search_sort_score_descends(api_client: TestClient, db):
+    """sort=score merges both surfaces by bm25 score, descending."""
+    start_ms, _ = day_bounds(FIXTURE_DAY)
+    _insert_session(db, title="checkpointers deep dive", wall_ms=start_ms + 10 * 60_000)
+    body = api_client.get("/search", params={"q": "checkpointers", "sort": "score"}).json()
+    assert body["total"] == 2
+    scores = [it["score"] for it in body["items"]]
+    assert scores == sorted(scores, reverse=True)
+    assert {it["kind"] for it in body["items"]} == {"frame", "session"}
+
+
+def test_search_sort_ts_newest_first(api_client: TestClient, db):
+    """sort=ts keeps the newest-first merged timeline, explicitly."""
+    start_ms, _ = day_bounds(FIXTURE_DAY)
+    _insert_session(db, title="Inception (2010)", wall_ms=start_ms + 55 * 60_000)
+    body = api_client.get("/search", params={"q": "inception", "sort": "ts"}).json()
+    assert [it["kind"] for it in body["items"]] == ["session", "frame"]
+
+
+def test_search_sort_invalid(api_client: TestClient):
+    assert api_client.get("/search", params={"q": "youtube", "sort": "bogus"}).status_code == 422
+    assert api_client.get("/search", params={"q": "youtube", "monitor": -1}).status_code == 422
 
 
 # ---- /frames ----

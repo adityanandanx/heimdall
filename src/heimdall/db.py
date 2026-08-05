@@ -410,7 +410,9 @@ class Database:
 
     # ---- FTS5 search ----
 
-    def search(self, query: str, *, window_class: str | None = None,
+    def search(self, query: str | None, *, window_class: str | None = None,
+               workspace: int | None = None, monitor: int | None = None,
+               fullscreen: bool | None = None, source: str | None = None,
                start: int | None = None, end: int | None = None,
                limit: int = 20, offset: int = 0,
                order: str = "score") -> tuple[int, list[dict]]:
@@ -422,34 +424,62 @@ class Database:
         `order="ts"` sorts newest-first instead of by bm25 score (the #37
         merged-search timeline). Raises sqlite3.OperationalError on an invalid
         FTS5 MATCH.
+
+        `query=None` browses: a plain filtered scan over `frames` with no FTS
+        (score 0, snippet falls back to the raw a11y/OCR text) — the #56
+        browse-mode seam. `source` restricts to the text column that won:
+        ``a11y`` or ``ocr``; ``transcript`` is a no-op for frames.
         """
         self.query_count += 1
         where, params = [], []
-        where.append("frames_fts MATCH ?")
-        params.append(query)
+        if query:
+            where.append("frames_fts MATCH ?")
+            params.append(query)
         if window_class is not None:
             where.append("f.window_class = ?")
             params.append(window_class)
+        if workspace is not None:
+            where.append("f.workspace = ?")
+            params.append(workspace)
+        if monitor is not None:
+            where.append("f.monitor = ?")
+            params.append(monitor)
+        if fullscreen is not None:
+            where.append("f.fullscreen = ?")
+            params.append(1 if fullscreen else 0)
+        if source == "a11y":
+            where.append("f.a11y_text IS NOT NULL AND f.a11y_text <> ''")
+        elif source == "ocr":
+            where.append("f.ocr_text IS NOT NULL AND f.ocr_text <> ''")
         if start is not None:
             where.append("f.ts >= ?")
             params.append(start)
         if end is not None:
             where.append("f.ts <= ?")
             params.append(end)
-        order_by = "f.ts DESC" if order == "ts" else "score"
+        if query:
+            snippet_col = (
+                "COALESCE(snippet(frames_fts, 0, '**', '**', ' … ', 14),"
+                "          snippet(frames_fts, 1, '**', '**', ' … ', 14))")
+            score_col = "bm25(frames_fts, 1.0, 1.0, 2.0, 1.0)"
+            order_by = "f.ts DESC" if order == "ts" else "score"
+        else:
+            snippet_col = "COALESCE(f.a11y_text, f.ocr_text, '')"
+            score_col = "0"
+            order_by = "f.ts DESC"
+        where_sql = f" WHERE {' AND '.join(where)}" if where else ""
         sql = (
             "SELECT f.id, f.ts, f.window_class, f.window_title, f.workspace, f.image_path,"
-            " COALESCE(snippet(frames_fts, 0, '**', '**', ' … ', 14),"
-            "          snippet(frames_fts, 1, '**', '**', ' … ', 14)) AS snippet,"
-            " bm25(frames_fts, 1.0, 1.0, 2.0, 1.0) AS score"
+            f" {snippet_col} AS snippet,"
+            f" {score_col} AS score"
             " FROM frames_fts JOIN frames f ON f.id = frames_fts.rowid"
-            f" WHERE {' AND '.join(where)} ORDER BY {order_by}"
+            f"{where_sql} ORDER BY {order_by}"
             " LIMIT ? OFFSET ?"
         )
         with self._lock, self.conn() as conn:
             total = conn.execute(
                 f"SELECT COUNT(*) FROM frames_fts JOIN frames f ON f.id = frames_fts.rowid"
-                f" WHERE {' AND '.join(where)}",
+                f"{where_sql}",
                 params,
             ).fetchone()[0]
             rows = conn.execute(sql, (*params, limit, offset)).fetchall()
@@ -630,7 +660,8 @@ class Database:
             ).fetchone()
             return _session_item(row) if row else None
 
-    def search_watch_sessions(self, query: str, *, player: str | None = None,
+    def search_watch_sessions(self, query: str | None, *, player: str | None = None,
+                              source: str | None = None,
                               start: int | None = None, end: int | None = None,
                               limit: int = 20, offset: int = 0,
                               order: str = "score") -> tuple[int, list[dict]]:
@@ -640,37 +671,52 @@ class Database:
         `order="ts"` sorts by ts_start newest-first instead of by bm25 score
         (the #37 merged-search timeline). Raises sqlite3.OperationalError on an
         invalid FTS5 MATCH.
+
+        `query=None` browses: a plain filtered scan with no FTS (score 0,
+        snippet falls back to media_title). `source="transcript"` keeps only
+        sessions with a transcript; ``a11y``/``ocr`` are no-ops for sessions.
         """
         self.query_count += 1
-        where = ["watch_sessions_fts MATCH ?"]
-        params = [query]
+        where = ["watch_sessions_fts MATCH ?"] if query else []
+        params = [query] if query else []
         if player is not None:
             where.append("s.player = ?")
             params.append(player)
+        if source == "transcript":
+            where.append("s.transcript IS NOT NULL AND s.transcript <> ''")
         if start is not None:
             where.append("s.ts_start >= ?")
             params.append(start)
         if end is not None:
             where.append("s.ts_start <= ?")
             params.append(end)
-        order_by = "s.ts_start DESC" if order == "ts" else "score"
+        if query:
+            snippet_col = (
+                "COALESCE(snippet(watch_sessions_fts, 0, '**', '**', ' … ', 14),"
+                "          snippet(watch_sessions_fts, 2, '**', '**', ' … ', 14),"
+                "          snippet(watch_sessions_fts, 1, '**', '**', ' … ', 14))")
+            score_col = "bm25(watch_sessions_fts, 2.0, 1.0, 0.5)"
+            order_by = "s.ts_start DESC" if order == "ts" else "score"
+        else:
+            snippet_col = "COALESCE(s.media_title, '')"
+            score_col = "0"
+            order_by = "s.ts_start DESC"
+        where_sql = f" WHERE {' AND '.join(where)}" if where else ""
         sql = (
             "SELECT s.id, s.player, s.media_title, s.media_source, s.ts_start, s.ts_end,"
             " s.pos_start, s.pos_end, s.length, s.ranges, s.live,"
             " s.cues_json, s.transcript, s.transcript_source,"
-            " COALESCE(snippet(watch_sessions_fts, 0, '**', '**', ' … ', 14),"
-            "          snippet(watch_sessions_fts, 2, '**', '**', ' … ', 14),"
-            "          snippet(watch_sessions_fts, 1, '**', '**', ' … ', 14)) AS snippet,"
-            " bm25(watch_sessions_fts, 2.0, 1.0, 0.5) AS score"
+            f" {snippet_col} AS snippet,"
+            f" {score_col} AS score"
             " FROM watch_sessions_fts JOIN watch_sessions s ON s.id = watch_sessions_fts.rowid"
-            f" WHERE {' AND '.join(where)} ORDER BY {order_by}"
+            f"{where_sql} ORDER BY {order_by}"
             " LIMIT ? OFFSET ?"
         )
         with self._lock, self.conn() as conn:
             total = conn.execute(
                 "SELECT COUNT(*) FROM watch_sessions_fts"
                 " JOIN watch_sessions s ON s.id = watch_sessions_fts.rowid"
-                f" WHERE {' AND '.join(where)}",
+                f"{where_sql}",
                 params,
             ).fetchone()[0]
             rows = conn.execute(sql, (*params, limit, offset)).fetchall()
