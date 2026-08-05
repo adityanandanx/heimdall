@@ -92,6 +92,28 @@ describe("DaySurface", () => {
         expect(screen.queryByTestId("hover-popup")).not.toBeInTheDocument();
     });
 
+    it("opens a media popup with session details when clicking a block", async () => {
+        renderDay();
+        await screen.findAllByText(/watch-lane\.tsx/);
+        fireEvent.click(screen.getByRole("button", { name: /Omurice/ }));
+        const dialog = await screen.findByRole("dialog", { name: /session details/i });
+        expect(dialog).toHaveTextContent("Omurice — Uncle Roger");
+        expect(dialog).toHaveTextContent("sidra");
+        expect(dialog).toHaveTextContent("whisper");
+        expect(dialog).toHaveTextContent("the most difficult omelet"); // cue
+        expect(dialog).toHaveTextContent("Fuiyoh"); // transcript
+        expect(dialog).toHaveTextContent("Jump to moment");
+    });
+
+    it("jumps to the media's moment and closes the popup", async () => {
+        renderDay();
+        await screen.findAllByText(/watch-lane\.tsx/);
+        fireEvent.click(screen.getByRole("button", { name: /Some dev video/ }));
+        await screen.findByRole("dialog", { name: /session details/i });
+        fireEvent.click(screen.getByText("Jump to moment"));
+        await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    });
+
     it("runs the day recap and renders its markdown", async () => {
         renderDay();
         await screen.findByText("⟳ synthesize");

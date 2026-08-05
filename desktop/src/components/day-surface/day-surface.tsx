@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { Frame } from "@/lib/api";
+import type { Frame, Session } from "@/lib/api";
 import { frameImageUrl } from "@/lib/api";
 import { formatTimeS } from "@/lib/format";
 import { srcOf } from "@/lib/frames";
@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils";
 import { useDayFrames, useDaySessions, useRunPipe, useStatus } from "@/hooks/use-day-browser";
 import { Filmstrip } from "./filmstrip";
 import { FrameMeta, SourceBadge } from "./frame-meta";
+import { SessionDetail } from "./session-detail";
 
 interface DaySurfaceProps {
     baseUrl: string;
@@ -22,6 +23,7 @@ export function DaySurface({ baseUrl, day, onDayChange, seek, onSeekDone }: DayS
     const [selected, setSelected] = useState<Frame | null>(null);
     const [filterCls, setFilterCls] = useState<string | null>(null);
     const [dayQuery, setDayQuery] = useState("");
+    const [mediaPopup, setMediaPopup] = useState<Session[] | null>(null);
     const searchRef = useRef<HTMLInputElement>(null);
     const userSelectedRef = useRef(false);
 
@@ -70,6 +72,7 @@ export function DaySurface({ baseUrl, day, onDayChange, seek, onSeekDone }: DayS
 
     useEffect(() => {
         const onKey = (e: KeyboardEvent) => {
+            if (mediaPopup) return;
             if (e.metaKey || e.ctrlKey || e.altKey) return;
             const target = e.target as HTMLElement | null;
             const typing =
@@ -87,7 +90,7 @@ export function DaySurface({ baseUrl, day, onDayChange, seek, onSeekDone }: DayS
         };
         window.addEventListener("keydown", onKey);
         return () => window.removeEventListener("keydown", onKey);
-    }, [step, frames.length]);
+    }, [step, frames.length, mediaPopup]);
 
     const apps = useMemo(() => {
         const map = new Map<string, number>();
@@ -99,6 +102,16 @@ export function DaySurface({ baseUrl, day, onDayChange, seek, onSeekDone }: DayS
     }, [frames]);
 
     const caption = selectedFrame;
+
+    const jumpTo = useCallback(
+        (ts: number) => {
+            if (!frames.length) return;
+            userSelectedRef.current = true;
+            setSelected(frameNear(frames, ts));
+            setMediaPopup(null);
+        },
+        [frames],
+    );
 
     const recapResult = recap.results["day-recap"] ?? recap.results["time-breakdown"];
 
@@ -226,6 +239,7 @@ export function DaySurface({ baseUrl, day, onDayChange, seek, onSeekDone }: DayS
                             userSelectedRef.current = true;
                             setSelected(f);
                         }}
+                        onMediaOpen={setMediaPopup}
                         hits={hits}
                         filterCls={filterCls}
                         ppm={ppm}
@@ -252,6 +266,10 @@ export function DaySurface({ baseUrl, day, onDayChange, seek, onSeekDone }: DayS
                     )}
                 </div>
             </div>
+
+            {mediaPopup && (
+                <SessionDetail sessions={mediaPopup} onClose={() => setMediaPopup(null)} onJump={jumpTo} />
+            )}
         </div>
     );
 }

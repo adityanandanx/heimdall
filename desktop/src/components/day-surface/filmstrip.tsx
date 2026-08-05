@@ -14,6 +14,7 @@ import {
     frameNear,
     playerColor,
     tsOf,
+    type Run,
     type Span,
 } from "@/lib/timeline";
 import { cn } from "@/lib/utils";
@@ -33,6 +34,7 @@ interface FilmstripProps {
     sessions: Session[];
     selected: Frame | null;
     onSelect: (f: Frame) => void;
+    onMediaOpen: (sessions: Session[]) => void;
     hits: Set<number> | null;
     filterCls: string | null;
     ppm: number;
@@ -45,7 +47,7 @@ interface HoverState {
     y: number;
 }
 
-export function Filmstrip({ baseUrl, frames, sessions, selected, onSelect, hits, filterCls, ppm, onPpmChange }: FilmstripProps) {
+export function Filmstrip({ baseUrl, frames, sessions, selected, onSelect, onMediaOpen, hits, filterCls, ppm, onPpmChange }: FilmstripProps) {
     const axis = useMemo<Span[]>(() => (frames.length > 1 ? buildAxis(frames, ppm) : []), [frames, ppm]);
     const axisW = axisWidth(axis);
 
@@ -68,6 +70,18 @@ export function Filmstrip({ baseUrl, frames, sessions, selected, onSelect, hits,
         () => new Set(sessions.map((s) => s.player)).size,
         [sessions],
     );
+    const sessionsByRun = useMemo(() => {
+        const map = new Map<Run, Session[]>();
+        for (const lr of laneRuns) {
+            map.set(
+                lr.run,
+                sessions.filter(
+                    (s) => s.player === lr.run.player && (s.media_title ?? "(untitled)") === lr.run.title,
+                ),
+            );
+        }
+        return map;
+    }, [laneRuns, sessions]);
 
     const timelineH = DOTS_ROW_H + lanes * LANE_H + 6;
 
@@ -245,7 +259,9 @@ export function Filmstrip({ baseUrl, frames, sessions, selected, onSelect, hits,
                             return (
                                 <div
                                     key={`${r.player}|${r.title}|${r.start}`}
-                                    className="absolute flex items-center overflow-hidden rounded-[4px] border"
+                                    role="button"
+                                    aria-label={`session ${r.title}`}
+                                    className="absolute flex cursor-pointer items-center overflow-hidden rounded-[4px] border transition-[filter] hover:brightness-125"
                                     style={{
                                         left: a,
                                         width: Math.max(b - a, 8),
@@ -254,7 +270,13 @@ export function Filmstrip({ baseUrl, frames, sessions, selected, onSelect, hits,
                                         background: `color-mix(in srgb, ${color} 30%, transparent)`,
                                         borderColor: `color-mix(in srgb, ${color} 55%, transparent)`,
                                     }}
-                                    title={`${r.player} — ${r.title}`}
+                                    title={`${r.player} — ${r.title} (click for details)`}
+                                    onPointerDown={(e) => e.stopPropagation()}
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        const hit = sessionsByRun.get(r);
+                                        if (hit && hit.length) onMediaOpen(hit);
+                                    }}
                                 >
                                     <span
                                         className="truncate px-1.5 text-[9px] whitespace-nowrap"
