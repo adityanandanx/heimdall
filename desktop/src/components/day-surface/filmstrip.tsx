@@ -2,6 +2,7 @@ import { useLayoutEffect, useMemo, useRef } from "react";
 import type { Frame, Session } from "@/lib/api";
 import { formatTime } from "@/lib/format";
 import {
+    assignLanes,
     axisOf,
     axisWidth,
     buildAxis,
@@ -16,6 +17,10 @@ import { cn } from "@/lib/utils";
 const MIN_PPM = 2;
 const MAX_PPM = 120;
 const DENSITY_BUCKETS = 48;
+
+const DOTS_ROW_H = 32;
+const LANE_H = 22;
+const BLOCK_H = 14;
 
 interface FilmstripProps {
     frames: Frame[];
@@ -55,6 +60,19 @@ export function Filmstrip({ frames, sessions, selected, onSelect, hits, filterCl
     }, [frames]);
 
     const maxDensity = Math.max(1, ...density);
+
+    const runs = useMemo(() => buildRuns(sessions), [sessions]);
+    const laneRuns = useMemo(() => assignLanes(runs), [runs]);
+    const lanes = useMemo(
+        () => laneRuns.reduce((m, l) => Math.max(m, l.lane + 1), 0),
+        [laneRuns],
+    );
+    const players = useMemo(
+        () => new Set(sessions.map((s) => s.player)).size,
+        [sessions],
+    );
+
+    const timelineH = DOTS_ROW_H + lanes * LANE_H + 6;
 
     // Zoom-anchor: keep the span under the cursor stable across ppm changes.
     useLayoutEffect(() => {
@@ -115,12 +133,6 @@ export function Filmstrip({ frames, sessions, selected, onSelect, hits, filterCl
         onSelect(hit.f);
     }
 
-    const runs = useMemo(() => buildRuns(sessions), [sessions]);
-    const players = useMemo(
-        () => new Set(sessions.map((s) => s.player)).size,
-        [sessions],
-    );
-
     const dayStart = frames[0]?.ts ?? null;
     const dayEnd = frames[frames.length - 1]?.ts ?? null;
 
@@ -144,20 +156,10 @@ export function Filmstrip({ frames, sessions, selected, onSelect, hits, filterCl
 
             <div
                 ref={scrollRef}
-                className="overflow-x-auto overflow-y-hidden pb-1 [scrollbar-width:thin]"
+                className="overflow-x-auto overflow-y-hidden pb-1.5 [scrollbar-width:thin]"
             >
                 <div className="relative" style={{ width: Math.max(axisW, 100) }}>
-                    <div className="relative h-3.5">
-                        {axis.filter((s) => s.off).map((s) => (
-                            <div
-                                key={s.a}
-                                className="absolute -top-0.5 -bottom-0.5 rounded-[3px] bg-[repeating-linear-gradient(45deg,rgba(224,108,117,0.08)_0_6px,transparent_6px_12px)]"
-                                style={{ left: s.x0, width: Math.max(s.x1 - s.x0, 1) }}
-                            />
-                        ))}
-                    </div>
-
-                    <div className="mb-2.5 flex h-[22px] items-end gap-0.5">
+                    <div className="mb-2 flex h-6 items-end gap-0.5">
                         {density.map((n, i) => (
                             <div
                                 key={i}
@@ -165,14 +167,15 @@ export function Filmstrip({ frames, sessions, selected, onSelect, hits, filterCl
                                     "min-w-0.5 flex-1 rounded-t-[2px] bg-primary/28",
                                     n >= maxDensity * 0.6 && n > 0 && "bg-primary/75",
                                 )}
-                                style={{ height: n ? Math.max(3, Math.min(22, n * 1.9)) : 3 }}
+                                style={{ height: n ? Math.max(3, Math.min(24, n * 2.2)) : 3 }}
                             />
                         ))}
                     </div>
 
                     <div
                         ref={timelineRef}
-                        className="relative h-[46px] cursor-pointer touch-none overflow-hidden rounded-md border border-line bg-surface-2 select-none"
+                        className="relative cursor-pointer touch-none overflow-hidden rounded-md border border-line bg-surface-2 select-none"
+                        style={{ height: timelineH }}
                         data-testid="filmstrip-timeline"
                         onPointerDown={(e) => {
                             if (e.button !== 0) return;
@@ -216,7 +219,16 @@ export function Filmstrip({ frames, sessions, selected, onSelect, hits, filterCl
                             }
                         }}
                     >
-                        <div className="absolute inset-x-0 top-0 flex h-6 items-center">
+                        {/* No-activity (laptop off / idle) spans — dimmed striped blocks. */}
+                        {axis.filter((s) => s.off).map((s) => (
+                            <div
+                                key={s.a}
+                                className="pointer-events-none absolute top-0 bottom-0 rounded-[3px] bg-[repeating-linear-gradient(45deg,rgba(224,108,117,0.09)_0_6px,transparent_6px_12px)]"
+                                style={{ left: s.x0, width: Math.max(s.x1 - s.x0, 1) }}
+                            />
+                        ))}
+
+                        <div className="absolute inset-x-0 top-0 flex h-8 items-center">
                             {frames.map((f) => {
                                 const sel = f.id === selected?.id;
                                 const hit = hits?.has(f.id);
@@ -225,7 +237,7 @@ export function Filmstrip({ frames, sessions, selected, onSelect, hits, filterCl
                                     <div
                                         key={f.id}
                                         className={cn(
-                                            "absolute size-1.5 -translate-x-1/2 rounded-full bg-faint transition-[background,transform]",
+                                            "absolute size-1.75 -translate-x-1/2 rounded-full bg-faint transition-[background,transform]",
                                             sel && "scale-[1.7] bg-primary",
                                             hit && "bg-ok",
                                             muted && "opacity-25",
@@ -235,36 +247,41 @@ export function Filmstrip({ frames, sessions, selected, onSelect, hits, filterCl
                                 );
                             })}
                         </div>
-                        <div className="absolute inset-x-0 top-6 flex h-5 items-center">
-                            {runs.map((r) => {
-                                const a = axisOf(axis, r.start);
-                                const b = Math.max(axisOf(axis, r.end), a + 6);
-                                const music = r.player.split(".")[0] === "sidra";
-                                return (
-                                    <div
-                                        key={`${r.player}|${r.title}|${r.start}`}
+
+                        {laneRuns.map(({ run: r, lane }) => {
+                            const a = axisOf(axis, r.start);
+                            const b = Math.max(axisOf(axis, r.end), a + 8);
+                            const music = r.player.split(".")[0] === "sidra";
+                            return (
+                                <div
+                                    key={`${r.player}|${r.title}|${r.start}`}
+                                    className={cn(
+                                        "absolute flex items-center overflow-hidden rounded-[4px] border",
+                                        music
+                                            ? "border-warn/50 bg-warn/25"
+                                            : "border-ok/55 bg-ok/35",
+                                    )}
+                                    style={{
+                                        left: a,
+                                        width: Math.max(b - a, 8),
+                                        top: DOTS_ROW_H + lane * LANE_H + 4,
+                                        height: BLOCK_H,
+                                    }}
+                                    title={`${r.player} — ${r.title}`}
+                                >
+                                    <span
                                         className={cn(
-                                            "absolute flex h-3 items-center overflow-hidden rounded-[4px] border",
-                                            music
-                                                ? "border-warn/50 bg-warn/25"
-                                                : "border-ok/55 bg-ok/35",
+                                            "truncate px-1.5 text-[9px] whitespace-nowrap",
+                                            music ? "text-warn" : "text-ok",
                                         )}
-                                        style={{ left: a, width: Math.max(b - a, 6) }}
-                                        title={`${r.player} — ${r.title}`}
                                     >
-                                        <span
-                                            className={cn(
-                                                "truncate px-1.5 text-[9px] whitespace-nowrap",
-                                                music ? "text-warn" : "text-ok",
-                                            )}
-                                        >
-                                            {music ? "♫ " : "▶ "}
-                                            {r.title}
-                                        </span>
-                                    </div>
-                                );
-                            })}
-                        </div>
+                                        {music ? "♫ " : "▶ "}
+                                        {r.title}
+                                    </span>
+                                </div>
+                            );
+                        })}
+
                         {selected && axis.length > 0 && (
                             <div
                                 className="pointer-events-none absolute top-[-4px] bottom-[-4px] z-10 w-0.5 bg-primary"

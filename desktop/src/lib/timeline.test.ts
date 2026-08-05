@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
     aggregateMedia,
+    assignLanes,
     axisOf,
     axisWidth,
     buildAxis,
@@ -18,6 +19,7 @@ import {
     sessionWatchedSec,
     shiftDay,
     tsOf,
+    type Run,
     type Span,
 } from "@/lib/timeline";
 
@@ -228,6 +230,15 @@ describe("colors & durations", () => {
         expect(clsColor("a")).not.toBe(clsColor("b"));
     });
 
+    it("clsColor maps common classes to the prototype palette", () => {
+        expect(clsColor("code.editor")).toBe("#61afef"); // accent
+        expect(clsColor("browser")).toBe("#98c379"); // ok
+        expect(clsColor("terminal")).toBe("#e5c07b"); // warn
+        expect(clsColor("google-chrome")).toBe("#98c379");
+        expect(clsColor("sidra")).toBe("#e5c07b");
+        expect(clsColor("vlc")).toBe("#37c2d6");
+    });
+
     it("playerColor falls back for unknown players", () => {
         expect(playerColor("chromium")).toBe("#ff6b6b");
         expect(playerColor("unknown")).toMatch(/^#[0-9a-f]{6}$/);
@@ -238,6 +249,54 @@ describe("colors & durations", () => {
         expect(fmtDur(45)).toBe("1m");
         expect(fmtDur(3600)).toBe("1h 0m");
         expect(fmtDur(7260)).toBe("2h 1m");
+    });
+});
+
+describe("assignLanes", () => {
+    const run = (start: number, end: number): Run => ({
+        player: "sidra",
+        title: "x",
+        start,
+        end,
+        watched_sec: 0,
+    });
+    const MIN = 60_000;
+
+    it("keeps sequential runs on one lane", () => {
+        const lanes = assignLanes([run(0, MIN), run(MIN, 2 * MIN), run(2 * MIN, 3 * MIN)]);
+        expect(lanes.map((l) => l.lane)).toEqual([0, 0, 0]);
+    });
+
+    it("stacks overlapping runs onto parallel lanes", () => {
+        const lanes = assignLanes([
+            run(0, 5 * MIN), //  A ──────────
+            run(2 * MIN, 4 * MIN), //   B ──── (overlaps A)
+            run(4 * MIN, 6 * MIN), //     C ────── (overlaps B? starts when A still active)
+        ]);
+        expect(lanes.map((l) => l.lane)).toEqual([0, 1, 1]);
+    });
+
+    it("reuses a lane once the previous run ended", () => {
+        const lanes = assignLanes([run(0, 3 * MIN), run(1 * MIN, 2 * MIN), run(3 * MIN, 4 * MIN)]);
+        expect(lanes.map((l) => l.lane)).toEqual([0, 1, 0]);
+    });
+
+    it("never assigns overlapping runs the same lane", () => {
+        const lanes = assignLanes([
+            run(0, 10 * MIN),
+            run(1 * MIN, 9 * MIN),
+            run(2 * MIN, 8 * MIN),
+            run(11 * MIN, 12 * MIN),
+        ]);
+        for (let i = 0; i < lanes.length; i++) {
+            for (let j = i + 1; j < lanes.length; j++) {
+                const a = lanes[i];
+                const b = lanes[j];
+                const overlap = a.run.start < b.run.end && b.run.start < a.run.end;
+                if (overlap) expect(a.lane).not.toBe(b.lane);
+            }
+        }
+        expect(new Set(lanes.map((l) => l.lane)).size).toBe(3);
     });
 });
 

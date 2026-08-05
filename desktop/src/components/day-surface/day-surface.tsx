@@ -194,19 +194,19 @@ export function DaySurface({ baseUrl, day, onDayChange, seek, onSeekDone }: DayS
             <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_340px]">
                 <div className="flex min-h-0 min-w-0 flex-col">
                     <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-background">
-                        <div className="relative h-[330px] max-h-[calc(100%-40px)] w-[560px] max-w-[94%] overflow-hidden rounded-md shadow-[var(--e1)]">
-                        {caption ? (
-                            <img
-                                src={frameImageUrl(baseUrl, caption.id)}
-                                alt={caption.window_class}
-                                className="h-full w-full object-contain"
-                            />
-                        ) : (
-                            <div className="flex h-full w-full items-center justify-center bg-[linear-gradient(135deg,var(--surface-2)_0%,var(--surface)_45%,var(--background)_100%)] text-xs text-faint">
-                                {framesQ.isLoading ? "loading…" : "no frames"}
-                            </div>
-                        )}
-                    </div>
+                        <div className="relative h-full w-full overflow-hidden rounded-md shadow-[var(--e1)]">
+                            {caption ? (
+                                <img
+                                    src={frameImageUrl(baseUrl, caption.id)}
+                                    alt={caption.window_class}
+                                    className="h-full w-full object-contain"
+                                />
+                            ) : (
+                                <div className="flex h-full w-full items-center justify-center bg-[linear-gradient(135deg,var(--surface-2)_0%,var(--surface)_45%,var(--background)_100%)] text-xs text-faint">
+                                    {framesQ.isLoading ? "loading…" : "no frames"}
+                                </div>
+                            )}
+                        </div>
                     {caption && (
                             <div className="absolute bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-3 rounded-full border border-line bg-background/85 px-3.5 py-1.5 text-xs whitespace-nowrap backdrop-blur">
                                 <b className="font-mono">{formatTimeS(caption.ts)}</b>

@@ -104,9 +104,22 @@ export function chapters<T extends { ts: string; window_class: string }>(frames:
     return out;
 }
 
+const APP_SEMANTIC: Array<{ re: RegExp; color: string }> = [
+    // Prototype color-coding: code → accent, browsers → ok, terminals → warn, media → warn.
+    { re: /code|editor|ide|obsidian|notion/, color: "#61afef" },
+    { re: /browser|chrome|chromium|firefox|brave|vivaldi|edge/, color: "#98c379" },
+    { re: /term|bash|zsh|fish|ssh|alacritty|kitty|ghostty/, color: "#e5c07b" },
+    { re: /sidra|spotify|music|lofi/, color: "#e5c07b" },
+    { re: /vlc|mpv|video|youtube|plex/, color: "#37c2d6" },
+    { re: /mail|gmail|thunderbird|telegram|whatsapp|discord|slack/, color: "#c07bff" },
+];
+
 const APP_PALETTE = ["#5b8cff", "#3ecf8e", "#f0b456", "#c07bff", "#ff7b9c", "#37c2d6", "#b0c2ff"];
 
 export function clsColor(cls: string): string {
+    for (const { re, color } of APP_SEMANTIC) {
+        if (re.test(cls)) return color;
+    }
     let h = 0;
     for (const ch of cls) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
     return APP_PALETTE[h % APP_PALETTE.length];
@@ -143,6 +156,32 @@ export interface Run {
     start: number;
     end: number;
     watched_sec: number;
+}
+
+export interface LaneRun {
+    run: Run;
+    lane: number;
+}
+
+/**
+ * Assign non-overlapping lanes (parallel rows) to media runs, first-fit by
+ * end time — overlapping sessions (e.g. sidra music while YouTube is up)
+ * stack into separate lanes so they render side by side, time-aligned.
+ */
+export function assignLanes(runs: Run[]): LaneRun[] {
+    const sorted = [...runs].sort((a, b) => a.start - b.start);
+    const ends: number[] = [];
+    const out: LaneRun[] = [];
+    for (const r of sorted) {
+        let lane = ends.findIndex((end) => r.start >= end);
+        if (lane === -1) {
+            lane = ends.length;
+            ends.push(0);
+        }
+        ends[lane] = r.end;
+        out.push({ run: r, lane });
+    }
+    return out;
 }
 
 /** Contiguous media runs — a gap longer than OFF_MIN_MS splits a run. */
