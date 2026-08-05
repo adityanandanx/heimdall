@@ -462,7 +462,9 @@ class Database:
                 "COALESCE(snippet(frames_fts, 0, '**', '**', ' … ', 14),"
                 "          snippet(frames_fts, 1, '**', '**', ' … ', 14))")
             score_col = "bm25(frames_fts, 1.0, 1.0, 2.0, 1.0)"
-            order_by = "f.ts DESC" if order == "ts" else "score"
+            # Secondary ts key so pagination is stable when scores tie
+            # (matches the merged tie-break in _merge_search).
+            order_by = "f.ts DESC" if order == "ts" else "score DESC, f.ts DESC"
         else:
             snippet_col = "COALESCE(f.a11y_text, f.ocr_text, '')"
             score_col = "0"
@@ -696,7 +698,8 @@ class Database:
                 "          snippet(watch_sessions_fts, 2, '**', '**', ' … ', 14),"
                 "          snippet(watch_sessions_fts, 1, '**', '**', ' … ', 14))")
             score_col = "bm25(watch_sessions_fts, 2.0, 1.0, 0.5)"
-            order_by = "s.ts_start DESC" if order == "ts" else "score"
+            # Secondary ts key so pagination is stable when scores tie.
+            order_by = "s.ts_start DESC" if order == "ts" else "score DESC, s.ts_start DESC"
         else:
             snippet_col = "COALESCE(s.media_title, '')"
             score_col = "0"

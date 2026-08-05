@@ -290,6 +290,57 @@ def test_search_sort_ts_newest_first(api_client: TestClient, db):
     assert [it["kind"] for it in body["items"]] == ["session", "frame"]
 
 
+def test_search_sort_score_pages_without_dupes(api_client: TestClient, db):
+    """sort=score paging is stable across pages (secondary ts key)."""
+    start_ms, _ = day_bounds(FIXTURE_DAY)
+    _insert_session(db, title="Inception (2010)", wall_ms=start_ms + 95 * 60_000)
+    pages = [
+        api_client.get("/search", params={"q": "inception", "sort": "score",
+                                          "limit": 1, "offset": off}).json()["items"][0]
+        for off in (0, 1)
+    ]
+    p1, p2 = pages
+    assert p1["id"] != p2["id"]
+    assert {p["kind"] for p in pages} == {"frame", "session"}
+
+
+def test_search_source_applies_with_query(api_client: TestClient):
+    """source=a11y|ocr gates FTS matches too, not just browse scans."""
+    ocr = api_client.get("/search", params={
+        "q": "inception", "source": "ocr", "kind": "frame",
+    }).json()
+    assert ocr["total"] == 1  # mpv@50 won via OCR
+    assert ocr["items"][0]["snippet"] == "movie about dreams inside dreams"
+    a11y = api_client.get("/search", params={
+        "q": "inception", "source": "a11y", "kind": "frame",
+    }).json()
+    assert a11y["total"] == 0  # a11y-won frames hold no "inception" text
+
+
+def test_search_source_transcript_noop_on_frames(api_client: TestClient):
+    """source=transcript is session-side; frames keep matching (no-op)."""
+    body = api_client.get("/search", params={
+        "q": "checkpointers", "kind": "frame", "source": "transcript",
+    }).json()
+    assert body["total"] == 1
+    assert body["items"][0]["kind"] == "frame"
+
+
+def test_search_whitespace_q_browses(api_client: TestClient):
+    """A whitespace-only q is treated as no query (browse mode), not a 422."""
+    body = api_client.get("/search", params={"q": "   "}).json()
+    assert body["total"] == 8
+    assert [it["kind"] for it in body["items"][:1]] == ["frame"]
+
+
+def test_search_browse_sort_score_is_newest_first(api_client: TestClient):
+    """Browse has no scores, so sort=score degrades to the ts timeline."""
+    body = api_client.get("/search", params={"sort": "score", "limit": 5}).json()
+    assert all(it["score"] == 0 for it in body["items"])
+    ids = [it["id"] for it in body["items"]]
+    assert ids == sorted(ids, reverse=True)
+
+
 def test_search_sort_invalid(api_client: TestClient):
     assert api_client.get("/search", params={"q": "youtube", "sort": "bogus"}).status_code == 422
     assert api_client.get("/search", params={"q": "youtube", "monitor": -1}).status_code == 422
