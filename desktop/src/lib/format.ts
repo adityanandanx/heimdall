@@ -27,6 +27,12 @@ const time = new Intl.DateTimeFormat(undefined, {
     minute: "2-digit",
 });
 
+const timeS = new Intl.DateTimeFormat(undefined, {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+});
+
 export function formatDateTime(ts: string | number | null): string | null {
     const d = parseTs(ts);
     return d ? dateTime.format(d) : null;
@@ -35,6 +41,11 @@ export function formatDateTime(ts: string | number | null): string | null {
 export function formatTime(ts: string | number | null): string | null {
     const d = parseTs(ts);
     return d ? time.format(d) : null;
+}
+
+export function formatTimeS(ts: string | number | null): string | null {
+    const d = parseTs(ts);
+    return d ? timeS.format(d) : null;
 }
 
 export function formatUptime(seconds: number): string {

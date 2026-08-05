@@ -1,4 +1,5 @@
 import { http, HttpResponse } from "msw";
+import { localISO } from "@/lib/timeline";
 
 export const healthPayload = {
     status: "ok",
@@ -57,7 +58,177 @@ export const capturedStatus = (overrides: Record<string, unknown> = {}) => {
 
 export const base = "http://127.0.0.1:3931";
 
+export const today = new Date();
+export const fixtureDay = localISO(today).slice(0, 10);
+
+const at = (h: number, m = 0) =>
+    new Date(today.getFullYear(), today.getMonth(), today.getDate(), h, m, 0, 0);
+
+export const frameFixtures = [
+    { id: 1, ts: at(9, 0), window_class: "code.editor", window_title: "timeline.ts — heimdall", workspace: 1, ocr_text: "axis of frames", a11y_text: null },
+    { id: 2, ts: at(9, 15), window_class: "browser", window_title: "Heimdall docs", workspace: 1, ocr_text: "readme", a11y_text: "Heimdall documentation" },
+    { id: 3, ts: at(9, 30), window_class: "terminal", window_title: "~/.local/bin", workspace: 2, ocr_text: "pnpm test", a11y_text: null },
+    { id: 4, ts: at(9, 45), window_class: "code.editor", window_title: "scrubber.tsx", workspace: 1, ocr_text: "pointer events", a11y_text: null },
+    { id: 5, ts: at(10, 0), window_class: "browser", window_title: "YouTube — omurice", workspace: 1, ocr_text: "video", a11y_text: null },
+    { id: 6, ts: at(10, 30), window_class: "browser", window_title: "YouTube — omurice", workspace: 1, ocr_text: "video", a11y_text: null },
+    { id: 7, ts: at(11, 0), window_class: "browser", window_title: "YouTube — omurice", workspace: 1, ocr_text: "video", a11y_text: null },
+    { id: 8, ts: at(11, 30), window_class: "code.editor", window_title: "routers.py", workspace: 1, ocr_text: "search endpoint", a11y_text: null },
+    { id: 9, ts: at(12, 0), window_class: "terminal", window_title: "~/.local/bin", workspace: 2, ocr_text: "git push", a11y_text: null },
+    { id: 10, ts: at(12, 30), window_class: "code.editor", window_title: "watch-lane.tsx", workspace: 1, ocr_text: "watched ranges", a11y_text: null },
+].map((f) => ({
+    id: f.id,
+    ts: localISO(f.ts),
+    monitor: 0,
+    workspace: f.workspace,
+    window_class: f.window_class,
+    window_title: f.window_title,
+    fullscreen: 0,
+    trigger: "interval",
+    image_path: `/tmp/heimdall/frames/${f.id}.png`,
+    ocr_text: f.ocr_text,
+    ocr_engine: null,
+    a11y_text: f.a11y_text,
+}));
+
+export const sessionFixtures = [
+    {
+        id: 21,
+        player: "sidra",
+        media_title: "Omurice — Uncle Roger",
+        media_source: null,
+        media_id: null,
+        ts_start: localISO(at(10, 0)),
+        ts_end: localISO(at(11, 30)),
+        pos_start: 100.5,
+        pos_end: 2600,
+        length: 2500,
+        ranges: [[1000000, 8000000], [45000000, 70000000]],
+        live: 0,
+        cues_json: JSON.stringify([
+            { t: 120, text: "the most difficult omelet" },
+            { t: 900, text: "fuiyoh" },
+        ]),
+        transcript: "Fuiyoh! He say uncle roger review the most difficult omelet...",
+        transcript_source: "whisper",
+    },
+    {
+        id: 22,
+        player: "chromium",
+        media_title: "Some dev video",
+        media_source: null,
+        media_id: null,
+        ts_start: localISO(at(12, 0)),
+        ts_end: null,
+        pos_start: 0,
+        pos_end: null,
+        length: null,
+        ranges: [[1000000, 3000000]],
+        live: 1,
+        cues_json: null,
+        transcript: null,
+        transcript_source: null,
+    },
+];
+
+export const searchFixtures = [
+    {
+        id: 2,
+        ts: localISO(at(9, 15)),
+        window_class: "browser",
+        window_title: "Heimdall docs",
+        workspace: 1,
+        image_path: "/tmp/heimdall/frames/2.png",
+        snippet: "Heimdall **documentation** in browser",
+        score: 1.9,
+        kind: "frame",
+    },
+    {
+        id: 21,
+        ts: localISO(at(10, 0)),
+        window_class: "sidra",
+        window_title: "Omurice — Uncle Roger",
+        workspace: 1,
+        image_path: "",
+        snippet: "uncle roger review the most difficult **omelet**",
+        score: 1.4,
+        kind: "session",
+    },
+];
+
+export const pipesPayload = {
+    "day-recap": {
+        pipe: "day-recap",
+        ts: localISO(at(13, 0)),
+        run_ms: 2311,
+        output_markdown: "# Recap\n\nA good day.\n\n- **two** hours of focus\n- one video\n\n```\ncode\n```\n",
+        output_path: `/tmp/heimdall/recaps/day-recap-${fixtureDay}.md`,
+        trace_url: "https://cloud.langfuse.com/project/xyz/trace/abc",
+        frame_count: 10,
+    },
+    "time-breakdown": {
+        pipe: "time-breakdown",
+        ts: localISO(at(13, 5)),
+        run_ms: 940,
+        output_markdown: "| app | minutes |\n|---|---|\n| code.editor | 90 |\n",
+        output_path: `/tmp/heimdall/recaps/time-breakdown-${fixtureDay}.md`,
+        trace_url: "",
+        frame_count: 10,
+    },
+};
+
+const PNG_1PX = new Uint8Array([
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
+    0x89, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x62, 0x00, 0x01, 0x00, 0x00,
+    0x05, 0x00, 0x01, 0x0d, 0x0a, 0x2d, 0xb4, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae,
+    0x42, 0x60, 0x82,
+]);
+
 export const handlers = [
     http.get(`${base}/health`, () => HttpResponse.json(healthPayload)),
     http.get(`${base}/status`, () => HttpResponse.json(statusPayload)),
+    http.get(`${base}/frames`, ({ request }) => {
+        const url = new URL(request.url);
+        const start = url.searchParams.get("start");
+        const end = url.searchParams.get("end");
+        let items = frameFixtures;
+        if (start) items = items.filter((f) => f.ts >= start);
+        if (end) items = items.filter((f) => f.ts < end);
+        const order = url.searchParams.get("order") ?? "asc";
+        if (order === "desc") items = [...items].reverse();
+        const offset = Number(url.searchParams.get("offset") ?? 0);
+        const limit = Number(url.searchParams.get("limit") ?? 100);
+        return HttpResponse.json({
+            total: items.length,
+            items: items.slice(offset, offset + limit),
+        });
+    }),
+    http.get(`${base}/sessions`, ({ request }) => {
+        const url = new URL(request.url);
+        const start = url.searchParams.get("start");
+        const end = url.searchParams.get("end");
+        let items = sessionFixtures;
+        if (start) items = items.filter((s) => s.ts_end === null || s.ts_end > start);
+        if (end) items = items.filter((s) => s.ts_start < end);
+        return HttpResponse.json({ total: items.length, items });
+    }),
+    http.get(`${base}/search`, ({ request }) => {
+        const url = new URL(request.url);
+        const q = url.searchParams.get("q")?.toLowerCase() ?? "";
+        const items = searchFixtures.filter((s) =>
+            (s.snippet + s.window_class + (s.window_title ?? "")).toLowerCase().includes(q),
+        );
+        return HttpResponse.json({ total: items.length, items });
+    }),
+    http.post(`${base}/pipes/run/:name`, ({ params }) => {
+        const name = params.name as keyof typeof pipesPayload;
+        return HttpResponse.json(pipesPayload[name] ?? { detail: "unknown pipe" }, {
+            status: name ? 200 : 404,
+        });
+    }),
+    http.get(`${base}/frames/:id/image`, () =>
+        HttpResponse.arrayBuffer(PNG_1PX.buffer as ArrayBuffer, {
+            headers: { "Content-Type": "image/png" },
+        }),
+    ),
 ];
