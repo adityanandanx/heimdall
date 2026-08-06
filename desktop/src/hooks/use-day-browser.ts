@@ -113,4 +113,4 @@ export function useRunPipe(baseUrl: string, day: string) {
 }
 
 // Re-export so App and the day browser share one /health cache entry.
-export { useHealth, useStatus } from "./use-heimdall";
+export { useHealth, useStatus, useSettings, useInvalidateSettings } from "./use-heimdall";

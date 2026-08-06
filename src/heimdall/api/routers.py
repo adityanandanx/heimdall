@@ -546,6 +546,26 @@ class SettingsWrite(BaseModel):
     value: Any
 
 
+@status_router.get("/settings")
+def get_settings(state: Any = Depends(_state)) -> dict:
+    """The full writable settings surface, as the app renders it (#77).
+
+    Reads the live config so the UI re-syncs after a daemon reload or an
+    external edit; values are the *configured* ones (the active engine split
+    lives under /status -> capture.ocr_engine).
+    """
+    from heimdall.settings import WRITABLE, get_value
+
+    values: dict[str, Any] = {}
+    for key in sorted(WRITABLE):
+        values[key] = get_value(state.config_path, key) if state.config_path else None
+    return {
+        "ok": True,
+        "writable": sorted(WRITABLE),
+        "values": values,
+    }
+
+
 class ForgetBody(BaseModel):
     categories: list[str]
     start: str

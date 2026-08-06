@@ -1,9 +1,11 @@
 import type { ReactNode } from "react";
-import { Activity, Database, MonitorPlay, Radio, Sparkles, Tv } from "lucide-react";
+import { useState } from "react";
+import { Activity, Database, MonitorPlay, Pause, Play, Radio, Sparkles, Tv } from "lucide-react";
 import type { ServerStatus } from "@/lib/api";
 import { formatBytes, formatTime, formatUptime } from "@/lib/format";
 import { fmtDur } from "@/lib/timeline";
 import { useHealth, useStatus } from "@/hooks/use-day-browser";
+import { writeSetting } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 interface StatusSurfaceProps {
@@ -24,6 +26,7 @@ export function StatusSurface({ baseUrl }: StatusSurfaceProps) {
     const captureAlive = !!st?.capture.alive;
     const llmReachable = !!st?.llama.reachable;
     const lastEvent = st?.capture.last_event_ts ?? null;
+    const paused = !!st?.capture.paused;
 
     return (
         <div className="flex h-full flex-col gap-4 overflow-y-auto p-7">
@@ -58,8 +61,9 @@ export function StatusSurface({ baseUrl }: StatusSurfaceProps) {
                     <div className="mb-1.5 flex items-center gap-2">
                         <LiveDot alive={captureAlive} />
                         <span className={cn("text-lg font-bold", captureAlive ? "text-ok" : "text-danger")}>
-                            {captureAlive ? "running" : "not running"}
+                            {paused ? "paused" : captureAlive ? "running" : "not running"}
                         </span>
+                        <PauseButton paused={paused} baseUrl={baseUrl} />
                     </div>
                     <MetaRows
                         rows={[
@@ -68,6 +72,9 @@ export function StatusSurface({ baseUrl }: StatusSurfaceProps) {
                             ["frames today", String(st?.db.frames_today ?? 0)],
                         ]}
                     />
+                    {st && st.capture.ocr_engine && (
+                        <EngineHint engine={st.capture.ocr_engine} />
+                    )}
                 </Bento>
 
                 <Bento span={S3} icon={<Sparkles className="h-4 w-4" />} label="LLM">
@@ -181,8 +188,63 @@ function MetaRows({ rows }: { rows: Array<[string, string]> }) {
     );
 }
 
-function PlayerStatus({ status }: { status: string }) {
-    const color =
+/** One-tap pause/resume for capture (writes capture.paused live, #76). */
+function PauseButton({ paused, baseUrl }: { paused: boolean; baseUrl: string }) {
+    const [state, setState] = useState<"idle" | "saving" | "error">("idle");
+
+    const flip = async () => {
+        setState("saving");
+        try {
+            await writeSetting(baseUrl, "capture.paused", !paused);
+            setState("idle");
+        } catch {
+            setState("error");
+        }
+    };
+
+    return (
+        <button
+            type="button"
+            onClick={flip}
+            disabled={state === "saving"}
+            title={paused ? "Resume capture" : "Pause capture (stops storing new frames)"}
+            aria-label={paused ? "resume capture" : "pause capture"}
+            className={cn(
+                "ml-auto flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] transition-colors",
+                paused
+                    ? "border-ok/50 bg-ok/10 text-ok hover:bg-ok/20"
+                    : "border-line text-dim hover:border-warn/50 hover:text-warn",
+            )}
+        >
+            {state === "error" ? (
+                <span className="text-danger">write failed</span>
+            ) : paused ? (
+                <>
+                    <Play className="h-2.5 w-2.5" /> resume
+                </>
+            ) : (
+                <>
+                    <Pause className="h-2.5 w-2.5" /> pause
+                </>
+            )}
+        </button>
+    );
+}
+
+/** Amber hint when the daemon fell back to a different engine than asked. */
+function EngineHint({ engine }: { engine: { configured: string; active: string } }) {
+    if (engine.active === engine.configured) return null;
+    return (
+        <p className="mt-2 flex items-start gap-1.5 rounded-md border border-warn/40 bg-warn/10 px-2 py-1.5 text-[10px] leading-snug text-warn">
+            <Sparkles className="mt-px h-3 w-3 shrink-0" />
+            <span>
+                {engine.configured} requested, running <b>{engine.active}</b> (fallback)
+            </span>
+        </p>
+    );
+}
+
+function PlayerStatus({ status }: { status: string }) {    const color =
         status === "playing"
             ? "bg-ok"
             : status === "paused"

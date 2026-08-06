@@ -33,12 +33,35 @@ export interface ServerStatus {
         extraction: string;
         ocr_also: string[];
         players: MediaPlayer[];
+        ocr_engine?: { configured: string; active: string };
+        paused?: boolean;
     };
     media: { last_session: WatchSession | null };
     asr: { queued: number; running: number; failed: number; items: unknown[] };
     llama: { reachable: boolean };
     tracing: { enabled: boolean; reason: string };
+    scheduler?: Record<string, string | null>;
     pipes: { last_runs: Record<string, string | null> };
+}
+
+export interface SettingsSurfaceValues {
+    ok: boolean;
+    writable: string[];
+    values: Record<string, unknown>;
+}
+
+export interface SettingsWriteResult {
+    ok: boolean;
+    key: string;
+    value: unknown;
+    applied_by: string;
+}
+
+export interface ForgetResult {
+    ok: boolean;
+    frames: number;
+    sessions: number;
+    failed_files: string[];
 }
 
 export interface Frame {
@@ -225,4 +248,55 @@ export async function runPipe(base: string, name: string, day: string): Promise<
         throw new ApiError(detail);
     }
     return (await res.json()) as PipeRunResult;
+}
+
+export function fetchSettings(base: string, signal?: AbortSignal): Promise<SettingsSurfaceValues> {
+    return fetchJson<SettingsSurfaceValues>(apiUrl(base, "/settings"), signal);
+}
+
+export async function writeSetting(
+    base: string,
+    key: string,
+    value: unknown,
+): Promise<SettingsWriteResult> {
+    const res = await fetch(apiUrl(base, "/settings"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ key, value }),
+    });
+    if (!res.ok) {
+        let detail = `${res.status} ${res.statusText}`;
+        try {
+            const body = (await res.json()) as { detail?: unknown };
+            if (body?.detail) detail = String(body.detail);
+        } catch {
+            /* keep status text */
+        }
+        throw new ApiError(detail);
+    }
+    return (await res.json()) as SettingsWriteResult;
+}
+
+export async function forgetData(
+    base: string,
+    categories: string[],
+    start: string,
+    end: string,
+): Promise<ForgetResult> {
+    const res = await fetch(apiUrl(base, "/forget"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ categories, start, end }),
+    });
+    if (!res.ok) {
+        let detail = `${res.status} ${res.statusText}`;
+        try {
+            const body = (await res.json()) as { detail?: unknown };
+            if (body?.detail) detail = String(body.detail);
+        } catch {
+            /* keep status text */
+        }
+        throw new ApiError(detail);
+    }
+    return (await res.json()) as ForgetResult;
 }

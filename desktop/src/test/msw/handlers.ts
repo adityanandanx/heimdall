@@ -20,6 +20,8 @@ export const statusPayload = {
             { name: "chromium.instance1208", status: "playing" },
             { name: "sidra", status: "stopped" },
         ],
+        ocr_engine: { configured: "auto", active: "cpu" },
+        paused: false,
     },
     media: {
         last_session: {
@@ -35,8 +37,46 @@ export const statusPayload = {
     asr: { queued: 0, running: 0, failed: 0, items: [] },
     llama: { reachable: true },
     tracing: { enabled: false, reason: "LANGFUSE_* env vars unset" },
+    scheduler: { "day-recap": null, "time-breakdown": "2026-08-06T23:05:00+05:30" },
     pipes: { last_runs: { "day-recap": null, "time-breakdown": null } },
 };
+
+/** Live, mutable settings store backing GET/POST /settings in tests. */
+export const settingsStore: Record<string, unknown> = {
+    "capture.ocr_engine": "auto",
+    "capture.extraction": "auto",
+    "capture.change_gate": true,
+    "capture.paused": false,
+    "capture.window_class_merge": [],
+    "watch.excluded_players": ["spotify"],
+    "watch.excluded_windows": [],
+    "watch.media_resolver": "extension",
+    "scheduler.day_recap": null,
+    "scheduler.time_breakdown": "30 23 * * *",
+    "observability.enabled": false,
+    "rules.window_class_category": { sidra: "Music", mpv: "Movies" },
+};
+
+export const settingsRequestUrls: string[] = [];
+
+export function resetSettingsStore() {
+    Object.assign(settingsStore, {
+        "capture.ocr_engine": "auto",
+        "capture.extraction": "auto",
+        "capture.change_gate": true,
+        "capture.paused": false,
+        "capture.window_class_merge": [],
+        "watch.excluded_players": ["spotify"],
+        "watch.excluded_windows": [],
+        "watch.media_resolver": "extension",
+        "scheduler.day_recap": null,
+        "scheduler.time_breakdown": "30 23 * * *",
+        "observability.enabled": false,
+        "rules.window_class_category": { sidra: "Music", mpv: "Movies" },
+    });
+}
+
+export const forgetRequests: Array<Record<string, unknown>> = [];
 
 export const capturedStatus = (overrides: Record<string, unknown> = {}) => {
     const base = statusPayload as unknown as Record<string, unknown>;
@@ -298,6 +338,28 @@ const PNG_1PX = new Uint8Array([
 export const handlers = [
     http.get(`${base}/health`, () => HttpResponse.json(healthPayload)),
     http.get(`${base}/status`, () => HttpResponse.json(statusPayload)),
+    http.get(`${base}/settings`, () => {
+        settingsRequestUrls.push("/settings");
+        return HttpResponse.json({
+            ok: true,
+            writable: Object.keys(settingsStore),
+            values: settingsStore,
+        });
+    }),
+    http.post(`${base}/settings`, async ({ request }) => {
+        settingsRequestUrls.push("/settings");
+        const body = (await request.json()) as { key: string; value: unknown };
+        if (!(body.key in settingsStore)) {
+            return HttpResponse.json({ detail: `${body.key} is not a writable setting` }, { status: 422 });
+        }
+        settingsStore[body.key] = body.value;
+        return HttpResponse.json({ ok: true, key: body.key, value: body.value, applied_by: "msw" });
+    }),
+    http.post(`${base}/forget`, async ({ request }) => {
+        const body = (await request.json()) as Record<string, unknown>;
+        forgetRequests.push(body);
+        return HttpResponse.json({ ok: true, frames: 0, sessions: 0, failed_files: [] });
+    }),
     http.get(`${base}/frames`, ({ request }) => {
         frameRequestUrls.push(request.url);
         const url = new URL(request.url);

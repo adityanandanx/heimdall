@@ -172,6 +172,31 @@ def test_settings_endpoint_rejects_bad_key_and_no_config_path(tmp_path):
     assert client2.post("/settings", json={"key": "capture.ocr_engine", "value": "cpu"}).status_code == 500
 
 
+def test_settings_get_returns_full_writable_surface(tmp_path):
+    """GET /settings mirrors the writable key set with live config values, so
+    the desktop surface re-syncs after a daemon reload or external edit."""
+    from fastapi.testclient import TestClient
+
+    from heimdall.api.app import create_app
+    from heimdall.config import load_config
+
+    cfg = _cfg(tmp_path, extra={"watch": {"excluded_players": ["spotify"]}})
+    app = create_app(load_config(str(cfg)), config_path=str(cfg))
+    client = TestClient(app)
+
+    r = client.get("/settings")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True
+    assert "capture.ocr_engine" in body["writable"]
+    assert body["values"]["capture.ocr_engine"] == "cpu"
+    assert body["values"]["watch.excluded_players"] == ["spotify"]
+
+    # a write is immediately visible on the next read
+    client.post("/settings", json={"key": "capture.ocr_engine", "value": "npu"})
+    assert client.get("/settings").json()["values"]["capture.ocr_engine"] == "npu"
+
+
 def test_settings_null_scheduler_key_round_trips(tmp_path):
     """The null sentinel disables a scheduled pipe (#73): write-through allows
     null for scheduler keys only, and the status readback reflects it."""
