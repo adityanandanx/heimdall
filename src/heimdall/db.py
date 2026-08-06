@@ -662,6 +662,50 @@ class Database:
             ).fetchone()
             return _session_item(row) if row else None
 
+    def forget(self, *, categories: list[str], start_ms: int, end_ms: int,
+               frames_path: Path, captions_path: Path) -> dict:
+        """Hard-delete captured data in [start_ms, end_ms) per category (#76).
+
+        Categories: "frames" deletes frame rows (FTS via trigger) + frame image
+        files; "sessions" deletes watch-session rows (FTS via trigger);
+        "transcripts" deletes caption-cache files for sessions in the window.
+        Runs in one transaction; files are removed after commit (a file failure
+        warns but never rolls back rows — row consistency wins).
+        """
+        self.query_count += 1
+        frames = 0
+        sessions = 0
+        media_ids: set[str] = set()
+        with self._lock, self.conn() as conn:
+            if "frames" in categories:
+                where, params = "ts >= ? AND ts < ?", [start_ms, end_ms]
+                rows = conn.execute(
+                    f"SELECT image_path FROM frames WHERE {where}", params).fetchall()
+                frame_files = [r[0] for r in rows if r[0]]
+                frames = conn.execute(f"DELETE FROM frames WHERE {where}", params).rowcount
+            if "sessions" in categories or "transcripts" in categories:
+                where, params = "ts_start >= ? AND ts_start < ?", [start_ms, end_ms]
+                sess_rows = conn.execute(
+                    "SELECT id, media_id FROM watch_sessions WHERE " + where, params).fetchall()
+                sessions = len(sess_rows)
+                media_ids = {r[1] for r in sess_rows if r[1]}
+                conn.execute(f"DELETE FROM watch_sessions WHERE {where}", params)
+            conn.commit()
+        failed_files: list[str] = []
+        if "frames" in categories:
+            for rel in frame_files:
+                try:
+                    (frames_path / rel).unlink()
+                except OSError:
+                    failed_files.append(str(rel))
+        if "transcripts" in categories:
+            for media_id in media_ids:
+                try:
+                    (captions_path / f"{media_id}.json3").unlink()
+                except OSError:
+                    failed_files.append(f"{media_id}.json3")
+        return {"frames": frames, "sessions": sessions, "failed_files": failed_files}
+
     def search_watch_sessions(self, query: str | None, *, player: str | None = None,
                               source: str | None = None,
                               start: int | None = None, end: int | None = None,

@@ -284,6 +284,7 @@ class CaptureDaemon:
         self.tools = tools
         self.tools.ocr_engine = config.capture.ocr_engine
         self.heartbeat = data / "capture.heartbeat"
+        self.engine_file = data / "capture.engine"
         self.manual_request = data / "capture.request"
         self.manual_ack = data / "capture.ack"
         self.data = data
@@ -297,6 +298,7 @@ class CaptureDaemon:
         self._manual_pending = False
         self.tracker = SessionTracker(pause_ends_session_s=config.watch.pause_ends_session_s)
         self._excluded_players = set(config.watch.excluded_players)
+        self._excluded_windows = set(config.watch.excluded_windows)
         self._live_rows: dict[str, int] = {}  # player -> watch_sessions row id
         self._last_phash: dict[str, str] = {}  # window_class -> phash (change gate, #34)
         self.events_q: queue.Queue[str] = queue.Queue()
@@ -617,6 +619,8 @@ class CaptureDaemon:
             if not meta:
                 self._manual_ack(status="error", detail="no active window found")
                 continue
+            if not manual and (meta.get("class") or "") in self._excluded_windows:
+                continue
             sig = activewindow_signature(meta)
             with self._lock:
                 if not manual and is_duplicate(sig, self._last_sig):
@@ -745,7 +749,10 @@ class CaptureDaemon:
             return
         self._config_mtime = marker_mtime
         self._excluded_players = set(self.config.watch.excluded_players)
+        self._excluded_windows = set(self.config.watch.excluded_windows)
         self.tools.ocr_engine = self.config.capture.ocr_engine
+        self.tools.media_resolver = self.config.watch.media_resolver
+        self._publish_engine()
         log.info("config reloaded (dirty marker); ocr_engine=%s paused=%s",
                  self.config.capture.ocr_engine, self.config.capture.paused)
 
@@ -756,11 +763,37 @@ class CaptureDaemon:
         except OSError:
             pass
 
+    def _publish_engine(self) -> None:
+        """Write the resolved OCR engine (npu|cpu) to a state file so the API
+        server's /status can show configured vs active (#71). JSON: the server
+        reads `active` only; `configured` is redundant with config but kept for
+        a single-source readout."""
+        try:
+            from heimdall.capture import ocr
+
+            active = ocr.active_engine() or (
+                "npu" if self.config.capture.ocr_engine in ("npu", "auto") and self._npu_available() else "cpu"
+            )
+            self.engine_file.parent.mkdir(parents=True, exist_ok=True)
+            self.engine_file.write_text(active)
+        except OSError:
+            pass
+
+    @staticmethod
+    def _npu_available() -> bool:
+        try:
+            from heimdall.capture.npu_ocr import install_npu_engine
+
+            return install_npu_engine()
+        except Exception:  # noqa: BLE001
+            return False
+
     # ---- lifecycle ----
 
     def start(self) -> None:
         init_db(self.db_path)
         self._write_heartbeat()
+        self._publish_engine()
         threads = [
             threading.Thread(target=self._listener, name="socket2", daemon=True),
             threading.Thread(target=self._debouncer, name="debouncer", daemon=True),

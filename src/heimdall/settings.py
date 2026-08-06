@@ -28,11 +28,19 @@ WRITABLE = {
     "capture.paused",
     "capture.window_class_merge",
     "watch.excluded_players",
+    "watch.excluded_windows",
     "watch.media_resolver",
     "scheduler.day_recap",
     "scheduler.time_breakdown",
     "observability.enabled",
     "rules.window_class_category",
+}
+
+# Keys whose value may be null (None): a disabled scheduled pipe (#73) is the
+# null exception to the spine's no-null rule.
+NULLABLE = {
+    "scheduler.day_recap",
+    "scheduler.time_breakdown",
 }
 
 
@@ -49,14 +57,20 @@ def validate_key(key: str, value: Any) -> str | None:
     """
     if key not in WRITABLE:
         return f"{key!r} is not a writable setting; writable keys: {sorted(WRITABLE)}"
-    if value is None:
+    if value is None and key not in NULLABLE:
         return f"cannot write null for {key!r}"
+    if value is None:
+        return None
     if key == "capture.ocr_engine" and value not in ("cpu", "npu", "auto"):
         return f"capture.ocr_engine must be one of cpu|npu|auto, got {value!r}"
-    if key == "capture.extraction" and value not in (True, False):
-        return f"capture.extraction must be a boolean, got {value!r}"
+    if key == "capture.extraction" and value not in ("auto", "a11y", "ocr"):
+        return f"capture.extraction must be one of auto|a11y|ocr, got {value!r}"
     if key in ("capture.change_gate", "capture.paused", "observability.enabled") and not isinstance(value, bool):
         return f"{key} must be a boolean, got {type(value).__name__}"
+    if key == "watch.media_resolver" and value not in ("extension", "cdp"):
+        return f"watch.media_resolver must be one of extension|cdp, got {value!r}"
+    if key in ("watch.excluded_players", "watch.excluded_windows") and not isinstance(value, list):
+        return f"{key} must be a list, got {type(value).__name__}"
     return None
 
 
@@ -89,7 +103,7 @@ def apply_write(config_path: Path, key: str, value: Any, *, dirty_path: Path | N
     """
     if key not in WRITABLE:
         raise UnknownSettingError(f"{key!r} is not a writable setting")
-    if value is None:
+    if value is None and key not in NULLABLE:
         raise ValueError(f"cannot write null for {key!r}")
 
     config_path = Path(config_path)

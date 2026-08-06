@@ -6,6 +6,7 @@ from __future__ import annotations
 from io import BytesIO
 from typing import Callable, Optional
 
+import yaml
 from PIL import Image, ImageDraw
 
 from heimdall.capture.events import (
@@ -20,6 +21,7 @@ from heimdall.capture.events import (
 )
 from heimdall.capture.spans import (compute_spans, rules_minutes, session_wall_ms,
                                     spans_to_table, track_playing_ms)
+from heimdall.settings import apply_write
 
 from conftest import content_tree
 
@@ -582,6 +584,86 @@ def test_tesseract_removed_from_tools():
     tools = CaptureTools()
     assert not hasattr(tools, "ocr")
     assert not hasattr(tools, "_ocr")
+
+
+def test_excluded_window_gate_skips_auto_but_manual_bypasses(tmp_path):
+    """watch.excluded_windows skips scheduled captures for that window class,
+    but a manual capture always fires (#72, trigger gate: no frame ever
+    stored for an excluded window on auto triggers)."""
+    from heimdall.capture.daemon import CaptureDaemon
+    from heimdall.config import Config
+    from heimdall.db import init_db
+
+    cfg = Config(data_dir=tmp_path)
+    cfg.watch.excluded_windows = ["steam"]
+    tools = _FakeTools(lambda c, t: None)
+    tools.activewindow = lambda: {"class": "steam", "title": "Steam",
+                                  "workspace": {"id": 1, "name": "1"},
+                                  "at": [0, 0], "size": [10, 10]}
+    daemon = CaptureDaemon(cfg, tools=tools)
+    init_db(path=daemon.db_path)
+
+    daemon.jobs.put(("activewindow", 1))  # auto: gated
+    daemon.jobs.put(("manual", 2))        # manual: bypasses the gate
+    daemon.jobs.put(None)
+    daemon._capture_worker()
+
+    total, _ = daemon.db.list_frames(limit=10)
+    assert total == 1  # only the manual frame stored
+
+
+def test_daemon_reload_swaps_excluded_windows_and_media_resolver(tmp_path):
+    """The dirty-marker reload must pick up the exclusion list and the media
+    resolver swap live, not only on restart (#72, #74)."""
+    from heimdall.capture.daemon import CaptureDaemon, CaptureTools
+    from heimdall.config import load_config
+
+    cfg_path = tmp_path / "config.yaml"
+    cfg_path.write_text(yaml.safe_dump({
+        "data_dir": str(tmp_path),
+        "watch": {"excluded_windows": ["steam"], "media_resolver": "extension"},
+    }))
+    daemon = CaptureDaemon(
+        load_config(str(cfg_path)),
+        tools=CaptureTools(captions_dir=tmp_path),
+        db_path=tmp_path / "db.sqlite",
+        config_path=str(cfg_path),
+    )
+    assert daemon._excluded_windows == {"steam"}
+    assert daemon.tools.media_resolver == "extension"
+
+    apply_write(cfg_path, "watch.excluded_windows", ["steam", "vlc"],
+                dirty_path=tmp_path / "settings.dirty")
+    apply_write(cfg_path, "watch.media_resolver", "cdp",
+                dirty_path=tmp_path / "settings.dirty")
+    daemon._reload_config_if_dirty()
+
+    assert daemon._excluded_windows == {"steam", "vlc"}
+    assert daemon.tools.media_resolver == "cdp"
+
+
+def test_daemon_publishes_active_engine_file(tmp_path):
+    """The daemon writes data/capture.engine with the engine it actually
+    resolved (npu/cpu), which /status reads for the active/configured split
+    (#71); a failed NPU install falls back to cpu without crashing."""
+    from heimdall.capture.daemon import CaptureDaemon, CaptureTools
+    from heimdall.config import load_config
+
+    cfg_path = tmp_path / "config.yaml"
+    cfg_path.write_text(yaml.safe_dump({
+        "data_dir": str(tmp_path),
+        "capture": {"ocr_engine": "auto"},
+    }))
+    daemon = CaptureDaemon(
+        load_config(str(cfg_path)),
+        tools=CaptureTools(captions_dir=tmp_path),
+        db_path=tmp_path / "db.sqlite",
+        config_path=str(cfg_path),
+    )
+    daemon._publish_engine()
+    engine = (tmp_path / "capture.engine").read_text()
+    assert engine in ("cpu", "npu")  # whatever is installed locally
+    assert daemon.engine_file == tmp_path / "capture.engine"
 
 
 # ---- per-window perceptual-hash change gate (ticket #34) ----

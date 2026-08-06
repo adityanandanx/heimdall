@@ -18,6 +18,7 @@ log = logging.getLogger("heimdall.capture")
 # `_engine` was built for; a mismatch means the setting changed mid-session.
 _engine: object | None = None
 _engine_key: str | None = None
+_active_engine: str | None = None  # resolved npu|cpu after a build, for /status (#71)
 _missing_logged = False
 
 # OCR is a background fallback; cap onnxruntime's thread pool so the extraction
@@ -40,10 +41,12 @@ def _build_engine(engine: str) -> object:
     from rapidocr import RapidOCR
 
     params = dict(_ORT_THREAD_PARAMS)
+    global _active_engine
     if engine in ("auto", "npu"):
         from heimdall.capture import npu_ocr
 
         if npu_ocr.install_npu_engine():
+            _active_engine = "npu"
             return RapidOCR(params=params)
     else:
         from heimdall.capture import npu_ocr
@@ -51,7 +54,15 @@ def _build_engine(engine: str) -> object:
         # a live flip back to cpu must undo the process-global NPU route,
         # and then match the same capped thread setup
         npu_ocr.uninstall_npu_engine()
+    _active_engine = "cpu"
     return RapidOCR(params=params)
+
+
+def active_engine() -> str | None:
+    """The resolved engine (npu|cpu) after the last build; None before any
+    build. The daemon publishes this so /status can distinguish the configured
+    value from what actually runs (#71)."""
+    return _active_engine
 
 
 def rapid_ocr(img: bytes, engine: str = "auto") -> Optional[str]:

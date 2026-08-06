@@ -351,6 +351,15 @@ def status(state: Any = Depends(_state)) -> dict:
     players_fn = getattr(state, "list_players", None) or _list_media_players
     ocr_also = sorted(config.capture.window_class_merge)
 
+    active_engine = _active_engine(config)
+    scheduler_next = {}
+    sched = getattr(state, "scheduler", None)
+    if sched is not None:
+        for job_id in ("day-recap", "time-breakdown"):
+            job = sched.get_job(job_id)
+            next_run = job.next_run_time.isoformat() if job and job.next_run_time else None
+            scheduler_next[job_id] = next_run
+
     total, items = state.db.list_watch_sessions(limit=1)
     last_session = None
     if items:
@@ -378,13 +387,17 @@ def status(state: Any = Depends(_state)) -> dict:
             "extraction": config.capture.extraction,
             "ocr_also": ocr_also,
             "players": players_fn(),
-            "ocr_engine": config.capture.ocr_engine,
+            "ocr_engine": {
+                "configured": config.capture.ocr_engine,
+                "active": active_engine,
+            },
             "paused": config.capture.paused,
         },
         "media": {"last_session": last_session},
         "asr": state.asr.pending(),
         "llama": {"reachable": llama_reachable},
         "tracing": {"enabled": gate.enabled, "reason": gate.reason},
+        "scheduler": scheduler_next,
         "pipes": {"last_runs": {name: state.last_runs.get(name) for name in registered_pipes()}},
     }
 
@@ -454,6 +467,27 @@ def session_transcript(session_id: int, state: Any = Depends(_state)):
     return JSONResponse(status_code=code, content=body)
 
 
+def _active_engine(config: Config) -> str:
+    """The engine the capture daemon actually runs (npu|cpu), from its state
+    file; falls back to the configured value when the daemon hasn't published
+    yet (never started, or server-only test mode)."""
+    try:
+        p = config.data_path / "capture.engine"
+        active = p.read_text(encoding="utf-8").strip()
+        if active in ("npu", "cpu"):
+            return active
+    except OSError:
+        pass
+    if config.capture.ocr_engine == "cpu":
+        return "cpu"
+    try:
+        from heimdall.capture.npu_ocr import install_npu_engine
+
+        return "npu" if install_npu_engine() else "cpu"
+    except Exception:  # noqa: BLE001
+        return "cpu"
+
+
 def _capture_status(config: Config, now_ms: int) -> tuple[bool, int | None]:
     """Capture daemon aliveness from the heartbeat file.
 
@@ -512,6 +546,48 @@ class SettingsWrite(BaseModel):
     value: Any
 
 
+class ForgetBody(BaseModel):
+    categories: list[str]
+    start: str
+    end: str
+
+
+_FORGET_CATEGORIES = ("frames", "sessions", "transcripts")
+
+
+@status_router.post("/forget")
+def forget(payload: ForgetBody, state: Any = Depends(_state)) -> dict:
+    """Hard-delete captured data in a window, per category (no undo, #76).
+
+    Only the typed "forget" gate in the app calls this; the window is
+    [start, end) in epoch ms. Row deletions are single-transaction (FTS stays
+    consistent through AFTER DELETE triggers); frame images + caption-cache
+    files follow after commit. A failed file delete is reported, never rolled
+    back.
+    """
+    unknown = [c for c in payload.categories if c not in _FORGET_CATEGORIES]
+    if unknown:
+        raise HTTPException(status_code=422, detail=f"unknown categories: {unknown}")
+    if not payload.categories:
+        raise HTTPException(status_code=422, detail="at least one category required")
+    try:
+        start_ms = _parse_time(payload.start, "start")
+        end_ms = _parse_time(payload.end, "end")
+        if end_ms is None or end_ms <= start_ms:
+            raise ValueError("end must be after start")
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    config: Config = state.config
+    result = state.db.forget(
+        categories=payload.categories,
+        start_ms=start_ms,
+        end_ms=end_ms,
+        frames_path=config.frames_path,
+        captions_path=config.captions_path,
+    )
+    return {"ok": True, **result}
+
+
 @status_router.post("/settings")
 def write_setting(payload: SettingsWrite, state: Any = Depends(_state)) -> dict:
     """Write one user-owned setting through to config.yaml; the capture daemon
@@ -536,6 +612,19 @@ def write_setting(payload: SettingsWrite, state: Any = Depends(_state)) -> dict:
         state.config = load_config(state.config_path)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=f"config write failed: {exc}")
+    if payload.key == "observability.enabled":
+        # trace_gate is lru-cached; a flip must be live, not restart-gated (#74)
+        from heimdall.observability import trace_gate
+
+        trace_gate.cache_clear()
+    if payload.key.startswith("scheduler."):
+        if getattr(state, "scheduler", None) is None:
+            raise HTTPException(status_code=500, detail="scheduler not running (serve without scheduler)")
+        from heimdall.scheduler import apply_cron
+
+        apply_cron(state, {"scheduler.day_recap": "day-recap",
+                           "scheduler.time_breakdown": "time-breakdown"}[payload.key],
+                   payload.value)
     return {
         "ok": True,
         "key": payload.key,

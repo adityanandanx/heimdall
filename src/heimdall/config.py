@@ -48,8 +48,11 @@ class WatchConfig:
 
     pause_ends_session_s: float = 60.0
     poll_interval_s: float = 30.0
+    pause_ends_session_s: float = 60.0
+    poll_interval_s: float = 30.0
     media_resolver: str = "extension"  # extension|cdp: how Chromium URLs are resolved (#44)
     excluded_players: list = field(default_factory=lambda: ["sidra"])  # MPRIS players with no watch sessions (#47)
+    excluded_windows: list = field(default_factory=list)  # window_class values never captured (#72)
 
 
 @dataclass
@@ -67,8 +70,8 @@ class AsrConfig:
 
 @dataclass
 class SchedulerConfig:
-    day_recap: str = "0 23 * * *"
-    time_breakdown: str = "5 23 * * *"
+    day_recap: str | None = "0 23 * * *"  # cron, or None = disabled (#73)
+    time_breakdown: str | None = "5 23 * * *"
 
 
 @dataclass
@@ -178,13 +181,16 @@ def load_config(path: str | None = None) -> Config:
         )
     if "watch" in raw:
         wat = raw["watch"] or {}
-        _warn_unknown("watch", {"pause_ends_session_s", "poll_interval_s", "media_resolver", "excluded_players"}, wat)
+        _warn_unknown("watch", {"pause_ends_session_s", "poll_interval_s", "media_resolver",
+                                "excluded_players", "excluded_windows"}, wat)
         excluded = wat.get("excluded_players")
+        excluded_win = wat.get("excluded_windows")
         cfg.watch = WatchConfig(
             pause_ends_session_s=float(_scalar("pause_ends_session_s", wat, cfg.watch.pause_ends_session_s)),
             poll_interval_s=float(_scalar("poll_interval_s", wat, cfg.watch.poll_interval_s)),
             media_resolver=_scalar("media_resolver", wat, cfg.watch.media_resolver),
             excluded_players=list(excluded) if isinstance(excluded, list) else list(cfg.watch.excluded_players),
+            excluded_windows=list(excluded_win) if isinstance(excluded_win, list) else list(cfg.watch.excluded_windows),
         )
     if "asr" in raw:
         asr = raw["asr"] or {}
@@ -200,7 +206,7 @@ def load_config(path: str | None = None) -> Config:
         cfg.scheduler = SchedulerConfig(
             day_recap=_scalar("day_recap", sch, cfg.scheduler.day_recap),
             time_breakdown=_scalar("time_breakdown", sch, cfg.scheduler.time_breakdown),
-        )
+        ) 
     if "rules" in raw:
         r = raw["rules"] or {}
         _warn_unknown("rules", {"window_class_category"}, r)
