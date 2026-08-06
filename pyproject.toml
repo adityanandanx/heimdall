@@ -11,6 +11,7 @@ dependencies = [
     "apscheduler>=3.11.3",
     "fastapi>=0.141.1",
     "httpx>=0.28.1",
+    "openvino>=2026.3.0",
     "pygobject>=3.56.0",
     "pyyaml>=6.0.3",
     "rapidocr>=3.9.2",
