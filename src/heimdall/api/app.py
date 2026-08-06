@@ -28,7 +28,8 @@ from heimdall.scheduler import start_scheduler as start_scheduler_fn
 def create_app(config: Config, *, db_path: str | Path | None = None,
                llm_transport: httpx.AsyncBaseTransport | None = None,
                list_players: Callable[[], list[dict]] | None = None,
-               start_scheduler: bool = False) -> FastAPI:
+               start_scheduler: bool = False,
+               config_path: str | Path | None = None) -> FastAPI:
     data = config.data_path
     db_path = Path(db_path) if db_path else data / "data.db"
     db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -47,6 +48,7 @@ def create_app(config: Config, *, db_path: str | Path | None = None,
         allow_headers=["*"],
     )
     app.state.config = config
+    app.state.config_path = str(config_path) if config_path else None
     app.state.db_path = db_path
     app.state.db = Database(db_path)
     app.state.llm = llm

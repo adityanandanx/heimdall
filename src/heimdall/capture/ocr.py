@@ -13,7 +13,11 @@ from typing import Optional
 
 log = logging.getLogger("heimdall.capture")
 
+# Engine registry: keyed by the `capture.ocr_engine` value, so a live config
+# flip rebuilds the right engine on next use. `_engine_key` tracks which one
+# `_engine` was built for; a mismatch means the setting changed mid-session.
 _engine: object | None = None
+_engine_key: str | None = None
 _missing_logged = False
 
 # OCR is a background fallback; cap onnxruntime's thread pool so the extraction
@@ -25,28 +29,62 @@ _ORT_THREAD_PARAMS = {
 }
 
 
-def rapid_ocr(img: bytes) -> Optional[str]:
+def _build_engine(engine: str) -> object:
+    """Build the engine for a `capture.ocr_engine` value; None if unavailable.
+
+    "npu" routes rapidocr's det/cls/rec factories to the OpenVINO NPU session
+    (`npu_ocr`); "auto" tries NPU first and degrades to CPU when the NPU can't
+    be used; "cpu" always uses onnxruntime with capped threads. Any engine that
+    fails to init degrades to the CPU engine, never None.
+    """
+    from rapidocr import RapidOCR
+
+    params = dict(_ORT_THREAD_PARAMS)
+    if engine in ("auto", "npu"):
+        from heimdall.capture import npu_ocr
+
+        if npu_ocr.install_npu_engine():
+            return RapidOCR(params=params)
+    else:
+        from heimdall.capture import npu_ocr
+
+        # a live flip back to cpu must undo the process-global NPU route,
+        # and then match the same capped thread setup
+        npu_ocr.uninstall_npu_engine()
+    return RapidOCR(params=params)
+
+
+def rapid_ocr(img: bytes, engine: str = "auto") -> Optional[str]:
     """Recognize text in a frame image; None on error or no text.
 
     The engine is lazily imported and initialized the first time so a machine
     without rapidocr degrades to None (the daemon keeps running, like a
-    missing playerctl) instead of failing at startup.
+    missing playerctl) instead of failing at startup. `engine` is the live
+    `capture.ocr_engine` value; a change between calls rebuilds the singleton.
     """
-    global _engine, _missing_logged
-    if _engine is None:
+    global _engine, _engine_key, _missing_logged
+    if engine not in ("cpu", "npu", "auto"):
+        log.warning("unknown ocr_engine %r, treating as auto", engine)
+        engine = "auto"
+    if _engine is None or _engine_key != engine:
         try:
             from rapidocr import RapidOCR
         except ImportError:
             if not _missing_logged:
                 log.warning("rapidocr not installed; OCR fallback disabled")
                 _missing_logged = True
+            _engine = None
+            _engine_key = engine
             return None
         try:
-            _engine = RapidOCR(params=_ORT_THREAD_PARAMS)
+            _engine = _build_engine(engine)
+            _engine_key = engine
         except Exception as exc:  # noqa: BLE001
             if not _missing_logged:
                 log.warning("rapidocr init failed; OCR fallback disabled: %s", exc)
                 _missing_logged = True
+            _engine = None
+            _engine_key = engine
             return None
     try:
         result = _engine(img)

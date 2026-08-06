@@ -24,6 +24,7 @@ from heimdall.timeutil import parse_day, today_str
 app = typer.Typer(help="heimdall — local screen memory", no_args_is_help=True)
 
 _cfg: Config = load_config()
+_cfg_path: str | None = None
 _client_factory: Callable[[Config], object] | None = None
 
 
@@ -85,14 +86,15 @@ def _client(cfg: Config, timeout: float = 300.0) -> ApiClient:
 
 @app.callback()
 def _callback(config_path: str = typer.Option(None, "--config", help="path to config.yaml")):
-    global _cfg
+    global _cfg, _cfg_path
     _cfg = load_config(config_path)
+    _cfg_path = config_path
 
 
 def _serve(cfg: Config) -> None:
     import uvicorn
 
-    server = create_app(cfg, start_scheduler=True)
+    server = create_app(cfg, start_scheduler=True, config_path=_cfg_path)
     uvicorn.run(server, host=cfg.api.bind, port=cfg.api.port, log_level="info")
 
 

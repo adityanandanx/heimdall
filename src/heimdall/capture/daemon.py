@@ -59,6 +59,7 @@ class CaptureTools:
     transcript_fetch: Callable[[str, list], Optional[dict]] = field(default=None)
     captions_dir: Path = field(default=None, repr=False)
     db: object = field(default=None, repr=False)
+    ocr_engine: str = "auto"  # live-read at call time; daemon reload updates it (#70)
     _cdp_session: object = field(default=None, init=False, repr=False)
     _ext_resolver: object = field(default=None, init=False, repr=False)
     _caption_cache: object = field(default=None, init=False, repr=False)
@@ -71,7 +72,7 @@ class CaptureTools:
         if self.a11y_read is None:
             self.a11y_read = self._a11y_read
         if self.rapid_ocr is None:
-            self.rapid_ocr = self._rapid_ocr
+            self.rapid_ocr = self._rapid_ocr(self)
         if self.playerctl_follow is None:
             self.playerctl_follow = self._playerctl_follow
         if self.list_players is None:
@@ -119,10 +120,13 @@ class CaptureTools:
         return a11y.read_window_tree(window_class, window_title)
 
     @staticmethod
-    def _rapid_ocr(img: bytes) -> Optional[str]:
-        from heimdall.capture import ocr
+    def _rapid_ocr(tools: "CaptureTools") -> Callable[[bytes], Optional[str]]:
+        def run(img: bytes) -> Optional[str]:
+            from heimdall.capture import ocr
 
-        return ocr.rapid_ocr(img)
+            return ocr.rapid_ocr(img, engine=tools.ocr_engine)
+
+        return run
 
     @staticmethod
     def _playerctl_follow() -> Iterable[str]:
@@ -263,8 +267,10 @@ def _player_present(player: str, players: set[str]) -> bool:
 class CaptureDaemon:
     """Owns the queues, threads and DB writes. `run()` blocks until stopped."""
 
-    def __init__(self, config: Config, tools: CaptureTools | None = None, db_path=None):
+    def __init__(self, config: Config, tools: CaptureTools | None = None, db_path=None,
+                 config_path: str | None = None):
         self.config = config
+        self.config_path = config_path
         data = config.data_path
         self.db_path = Path(db_path) if db_path else data / "data.db"
         self.db = Database(self.db_path)
@@ -273,8 +279,10 @@ class CaptureDaemon:
                 media_resolver=config.watch.media_resolver,
                 captions_dir=config.captions_path,
                 db=self.db,
+                ocr_engine=config.capture.ocr_engine,
             )
         self.tools = tools
+        self.tools.ocr_engine = config.capture.ocr_engine
         self.heartbeat = data / "capture.heartbeat"
         self.manual_request = data / "capture.request"
         self.manual_ack = data / "capture.ack"
@@ -492,6 +500,11 @@ class CaptureDaemon:
             self._watch_poll_once()
 
     def _watch_poll_once(self) -> None:
+        if self.config.capture.paused:
+            now_ms = int(time.time() * 1000)
+            for player in list(self.tracker.open_sessions()):
+                self._persist_session(self.tracker.exit(player, now_ms))
+            return
         try:
             players = set(self.tools.list_players())
         except Exception:  # noqa: BLE001
@@ -590,6 +603,10 @@ class CaptureDaemon:
                 break
             trigger, ts = item
             manual = trigger == "manual"
+            if self.config.capture.paused:
+                if manual:
+                    self._manual_ack(status="error", detail="capture is paused (#76)")
+                continue
             now = time.monotonic()
             with self._lock:
                 # a manual capture always fires regardless of the interval gate
@@ -702,6 +719,35 @@ class CaptureDaemon:
     def _heartbeat_loop(self) -> None:
         while not self._stop.wait(15):
             self._write_heartbeat()
+            self._reload_config_if_dirty()
+
+    def _reload_config_if_dirty(self) -> None:
+        """Re-read config.yaml when the app wrote it (settings.dirty marker).
+
+        Live settings (#70): the API server writes config.yaml then touches
+        settings.dirty; this poll (15s cadence) picks it up and swaps
+        self.config — extraction mode, OCR engine, exclusions, pause, cron.
+        Non-config runtime state (session tracker, queues) is untouched.
+        """
+        try:
+            dirty = self.data / "settings.dirty"
+            marker_mtime = dirty.stat().st_mtime
+        except OSError:
+            return
+        if getattr(self, "_config_mtime", 0.0) >= marker_mtime:
+            return
+        from heimdall.config import load_config
+
+        try:
+            self.config = load_config(self.config_path)
+        except Exception as exc:  # noqa: BLE001 — never kill the loop on a bad file
+            log.warning("config reload failed (keeping previous): %s", exc)
+            return
+        self._config_mtime = marker_mtime
+        self._excluded_players = set(self.config.watch.excluded_players)
+        self.tools.ocr_engine = self.config.capture.ocr_engine
+        log.info("config reloaded (dirty marker); ocr_engine=%s paused=%s",
+                 self.config.capture.ocr_engine, self.config.capture.paused)
 
     def _write_heartbeat(self) -> None:
         try:
@@ -774,7 +820,7 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, handlers=handlers,
                         format="%(asctime)s %(name)s %(levelname)s %(message)s")
 
-    CaptureDaemon(load_config(args.config)).run()
+    CaptureDaemon(load_config(args.config), config_path=args.config).run()
 
 
 if __name__ == "__main__":

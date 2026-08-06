@@ -38,6 +38,8 @@ class CaptureConfig:
     extraction: str = "auto"  # auto|a11y|ocr; auto = content-bearing test, a11y wins, blind -> RapidOCR (#34)
     change_gate: bool = True  # per-window phash gate: unchanged keepalives skip re-extraction (#34)
     window_class_merge: dict[str, str] = field(default_factory=dict)  # class -> "ocr_also": store OCR alongside a11y (#34)
+    ocr_engine: str = "auto"  # cpu|npu|auto: OCR inference engine (auto = NPU if usable, else CPU) (#71)
+    paused: bool = False  # full-stop pause: no frames, extraction, watch sessions, or ASR (#76)
 
 
 @dataclass
@@ -160,7 +162,8 @@ def load_config(path: str | None = None) -> Config:
         cap = raw["capture"] or {}
         _warn_unknown("capture", {"debounce_s", "min_interval_s", "keepalive_min",
                                   "extract_workers", "extraction",
-                                  "change_gate", "window_class_merge"}, cap)
+                                  "change_gate", "window_class_merge",
+                                  "ocr_engine", "paused"}, cap)
         wcm = cap.get("window_class_merge")
         cfg.capture = CaptureConfig(
             debounce_s=float(_scalar("debounce_s", cap, cfg.capture.debounce_s)),
@@ -170,6 +173,8 @@ def load_config(path: str | None = None) -> Config:
             extraction=_scalar("extraction", cap, cfg.capture.extraction),
             change_gate=bool(_scalar("change_gate", cap, cfg.capture.change_gate)),
             window_class_merge=wcm if isinstance(wcm, dict) else {},
+            ocr_engine=_scalar("ocr_engine", cap, cfg.capture.ocr_engine),
+            paused=bool(_scalar("paused", cap, cfg.capture.paused)),
         )
     if "watch" in raw:
         wat = raw["watch"] or {}

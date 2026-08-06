@@ -378,6 +378,8 @@ def status(state: Any = Depends(_state)) -> dict:
             "extraction": config.capture.extraction,
             "ocr_also": ocr_also,
             "players": players_fn(),
+            "ocr_engine": config.capture.ocr_engine,
+            "paused": config.capture.paused,
         },
         "media": {"last_session": last_session},
         "asr": state.asr.pending(),
@@ -503,3 +505,40 @@ def _llama_reachable(base_url: str, transport: httpx.AsyncBaseTransport | None) 
             return r.status_code == 200
     except Exception:
         return False
+
+
+class SettingsWrite(BaseModel):
+    key: str
+    value: Any
+
+
+@status_router.post("/settings")
+def write_setting(payload: SettingsWrite, state: Any = Depends(_state)) -> dict:
+    """Write one user-owned setting through to config.yaml; the capture daemon
+    picks it up via the settings.dirty marker (#70)."""
+    from heimdall.settings import apply_write, get_value, touch_dirty, validate_key
+
+    config: Config = state.config
+    error = validate_key(payload.key, payload.value)
+    if error:
+        raise HTTPException(status_code=422, detail=error)
+    if not state.config_path:
+        raise HTTPException(status_code=500, detail="server has no config_path (embedded/test mode)")
+    try:
+        apply_write(
+            state.config_path,
+            payload.key,
+            payload.value,
+            dirty_path=config.data_path / "settings.dirty",
+        )
+        from heimdall.config import load_config
+
+        state.config = load_config(state.config_path)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"config write failed: {exc}")
+    return {
+        "ok": True,
+        "key": payload.key,
+        "value": get_value(state.config_path, payload.key),
+        "applied_by": "daemon-on-next-poll",
+    }
