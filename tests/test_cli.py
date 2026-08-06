@@ -272,3 +272,18 @@ def test_status_unreachable_server_fails_fast(config_path, capsys):
     err = capsys.readouterr().err
     assert "cannot reach heimdall API" in err
     assert "heimdall serve" in err
+
+
+def test_callback_resolves_default_config_path(monkeypatch):
+    """serve with no --config flag must know where its config lives, so
+    GET/POST /settings can write through; previously it stayed None and every
+    settings write 500'd with "server has no config_path"."""
+    from heimdall import cli
+    from heimdall.config import DEFAULT_CONFIG_PATH
+
+    cli._cfg_path = None
+    cli._callback(config_path=None)
+    assert cli._cfg_path == DEFAULT_CONFIG_PATH
+
+    cli._callback(config_path="/tmp/custom.yaml")
+    assert cli._cfg_path == "/tmp/custom.yaml"

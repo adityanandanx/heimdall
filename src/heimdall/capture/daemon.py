@@ -28,7 +28,7 @@ from heimdall.capture.events import activewindow_signature, classify_trigger, is
 from heimdall.capture.ocr import route_extraction
 from heimdall.capture.phash import phash
 from heimdall.capture.sessions import SessionTracker, WatchSession, normalize_player, parse_mpris_line
-from heimdall.config import Config, load_config
+from heimdall.config import DEFAULT_CONFIG_PATH, Config, load_config
 from heimdall.db import Database, init_db
 
 log = logging.getLogger("heimdall.capture")
@@ -841,7 +841,7 @@ def main() -> None:
     import argparse
 
     parser = argparse.ArgumentParser(prog="heimdall-capture", description="event-driven capture daemon")
-    parser.add_argument("--config", default=None, help="path to config.yaml")
+    parser.add_argument("--config", default=None, help="path to config.yaml (default ~/.heimdall/config.yaml)")
     parser.add_argument("--log-dir", default=None, help="write log to <dir>/capture.log instead of stderr")
     args = parser.parse_args()
 
@@ -853,7 +853,12 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, handlers=handlers,
                         format="%(asctime)s %(name)s %(levelname)s %(message)s")
 
-    CaptureDaemon(load_config(args.config), config_path=args.config).run()
+    # No --config flag: resolve the default so the dirty-marker reload and
+    # settings writes always re-read the same file the server edits.
+    CaptureDaemon(
+        load_config(args.config),
+        config_path=args.config or DEFAULT_CONFIG_PATH,
+    ).run()
 
 
 if __name__ == "__main__":

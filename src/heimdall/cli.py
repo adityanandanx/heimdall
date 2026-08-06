@@ -17,7 +17,7 @@ import typer
 
 from heimdall.api.app import create_app
 from heimdall.capture.sessions import fmt_video_time
-from heimdall.config import Config, load_config
+from heimdall.config import DEFAULT_CONFIG_PATH, Config, load_config
 from heimdall.pipes.merge import merge as merge_days
 from heimdall.timeutil import parse_day, today_str
 
@@ -87,8 +87,12 @@ def _client(cfg: Config, timeout: float = 300.0) -> ApiClient:
 @app.callback()
 def _callback(config_path: str = typer.Option(None, "--config", help="path to config.yaml")):
     global _cfg, _cfg_path
+    # No --config flag: resolve the default location so the server knows where
+    # its own config lives and settings writes (GET/POST /settings) can reach
+    # it. load_config(None) already uses this default, so the two can never
+    # disagree.
+    _cfg_path = config_path or DEFAULT_CONFIG_PATH
     _cfg = load_config(config_path)
-    _cfg_path = config_path
 
 
 def _serve(cfg: Config) -> None:
