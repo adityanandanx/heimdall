@@ -35,12 +35,44 @@ class NpuInferSession:
         self._core = ov.Core()
         model_path = cfg.get("model_path")
         if model_path is None:
-            raise ValueError("model_path required for NPU session")
+            # Mirror OrtInferSession's default-model resolution (#70): rapidocr
+            # only sets model_path when the app passed it explicitly (the proto
+            # did); otherwise resolve the packaged model via model_root_dir.
+            model_path = self._resolve_default_model(cfg)
         self._model_path = Path(model_path)
         self._cache: OrderedDict[tuple, object] = OrderedDict()
         self._in_name = "x"
         self.model = None
         self.session = None
+
+    def _resolve_default_model(self, cfg: dict[str, Any]) -> Path:
+        from rapidocr.inference_engine.base import FileInfo, InferSession
+        from rapidocr.utils.download_file import DownloadFile, DownloadFileInput
+
+        model_root_dir = cfg.get("model_root_dir")
+        if model_root_dir is None:
+            raise ValueError("Either model_path or model_root_dir must be provided in the configuration.")
+        model_root_dir = Path(model_root_dir)
+        model_root_dir.mkdir(parents=True, exist_ok=True)
+        model_info = InferSession.get_model_url(
+            FileInfo(
+                engine_type=cfg.engine_type,
+                ocr_version=cfg.ocr_version,
+                task_type=cfg.task_type,
+                lang_type=cfg.lang_type,
+                model_type=cfg.model_type,
+            )
+        )
+        model_path = model_root_dir / Path(model_info["model_dir"]).name
+        DownloadFile.run(
+            DownloadFileInput(
+                file_url=model_info["model_dir"],
+                sha256=model_info["SHA256"],
+                save_path=model_path,
+                logger=logging.getLogger("rapidocr"),
+            )
+        )
+        return model_path
 
     def _compiled_for(self, input_shape: tuple) -> object:
         import openvino as ov
