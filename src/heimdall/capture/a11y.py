@@ -122,6 +122,44 @@ def is_tab_selected(node: dict) -> bool:
     return bool({"active", "focused"} & states)
 
 
+# AT-SPI/web roles that hold the actual page content inside a browser
+# window: the tab, toolbar, and bookmarks chrome are their *siblings*.
+PAGE_DOCUMENT_ROLES = frozenset({"document web", "document frame", "document"})
+
+_DOC_CHROME_NOTE = """\
+Browsers expose the whole window in one tree: the browser chrome (toolbar,
+omnibox, tab strip, bookmarks bar) hangs off chrome-era nodes while the page
+lives in a DOCUMENT node (Chrome: 'document web'; others: 'document'/'document
+frame'). Storing the full tree makes a11y_text read like a browser menu, so
+only the page-document subtrees are kept; non-browser apps with no DOCUMENT
+node pass through untouched.
+"""
+
+
+def page_documents(tree: Iterable[dict]) -> list[dict]:
+    """Keep only the outermost page-document subtrees of a window.
+
+    Browsers expose the whole window in one tree: the toolbar, omnibox, tab
+    strip and bookmarks bar hang off chrome nodes that are *siblings* of the
+    page, which lives in a DOCUMENT node (Chrome: 'document web'; others:
+    'document'/'document frame'). Keeping every node makes a11y_text read
+    like a browser menu; this reduces the tree to the page. Windows without
+    any DOCUMENT node (Thunar, kitty, …) pass through untouched — no-op.
+    """
+    docs = [n for n in _outermost_documents(tree)]
+    return docs or list(tree)
+
+
+def _outermost_documents(nodes: Iterable[dict]) -> Iterable[dict]:
+    for node in nodes:
+        if (node.get("role") or "").lower() in PAGE_DOCUMENT_ROLES:
+            # Nested documents (iframe / shadow roots) stay inside this
+            # subtree, so only the outermost document is yielded.
+            yield node
+        else:
+            yield from _outermost_documents(node.get("children") or [])
+
+
 # ---- AT-SPI reader (interface, exercised manually) ----
 
 def _atspi():
@@ -192,7 +230,9 @@ def read_window_tree(window_class: str, window_title: str) -> list[dict] | None:
             best_score, best_tree = score, tree
     if best_tree is None or best_score < 0.55:
         return None
-    return prune_tabs(best_tree)
+    # Drop browser chrome (toolbar / omnibox / tab strip / bookmarks) that
+    # siblings the page in the same window tree, keeping only the page docs.
+    return page_documents(prune_tabs(best_tree))
 
 
 def _walk(node, atspi, depth: int, count: int) -> list[dict]:

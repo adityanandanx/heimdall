@@ -228,6 +228,84 @@ def test_prune_tabs_keeps_only_active_tab():
     assert any(_role_text(n) == ("paragraph", "page content") for n in _walk_nodes(pruned))
 
 
+def _walker_names(nodes):
+    for n in nodes:
+        yield n["name"]
+        yield from _walker_names(n.get("children") or [])
+
+
+# ---- page-document pruning (#68: page content, not browser chrome) ----
+
+def _chrome_window() -> list[dict]:
+    """A faithful miniature of the live Chrome AT-SPI window (measured):
+    the toolbar omnibox and bookmarks bar are siblings of the document."""
+    return [node("application", "Google Chrome", children=[
+        node("frame", "Software Engineer Internship at Atlan | Remote - Google Chrome", children=[
+            node("button", "Minimise"),
+            node("button", "Maximise"),
+            node("button", "Restore"),
+            node("button", "Close"),
+            node("static", "Untitled - Google Chrome", children=[
+                node("button", "Back"),
+                node("button", "Forward"),
+                node("button", "Reload"),
+                node("button", "Home"),
+                node("entry", "Address and search bar"),
+            ]),
+            node("tool bar", "Bookmarks", children=[
+                node("button", "Apps"),
+                node("button", "airbnb/javascript: JavaScript Style Guide"),
+                node("button", "Hacker News"),
+            ]),
+            node("document web", "Software Engineer Internship at Atlan | Remote", children=[
+                node("heading", "", "Software Engineer Internship at Atlan | Remote"),
+                node("link", "Home"),
+                node("link", "Internships"),
+                node("static", "", "Your Dashboards"),
+            ]),
+        ]),
+    ])]
+
+
+def test_page_documents_drops_browser_chrome():
+    from heimdall.capture.a11y import page_documents
+    tree = _chrome_window()
+    pruned = page_documents(tree)
+    text = flatten_text(pruned)
+    assert "Back" not in text
+    assert "Bookmarks" not in text
+    assert "Address and search bar" not in text
+    assert "Hacker News" not in text
+    assert "Software Engineer Internship at Atlan | Remote" in text
+    assert "Internships" in text
+    assert len(pruned) == 1
+    assert pruned[0]["role"] == "document web"
+
+
+def test_page_documents_noop_without_document_roles():
+    from heimdall.capture.a11y import page_documents
+    tree = [node("application", "thunar", children=[
+        node("frame", "heimdall - Thunar", children=[
+            node("tool bar", children=[node("button", "Back")]),
+            node("table cell", "Downloads"),
+        ]),
+    ])]
+    assert page_documents(tree) == tree
+
+
+def test_page_documents_keeps_only_outermost_nested_documents():
+    """iframes nest inside the page document; only the outermost is yielded
+    so siblings (and duplicate text) are never emitted twice."""
+    from heimdall.capture.a11y import page_documents
+    tree = [node("document", "page", children=[
+        node("document", "iframe", children=[node("paragraph", text="nested")]),
+        node("paragraph", text="outer"),
+    ])]
+    pruned = page_documents(tree)
+    assert len(pruned) == 1
+    assert _walker_text(pruned).count("nested") == 1
+
+
 def test_prune_tabs_drops_list_with_no_selected_tab():
     from heimdall.capture.a11y import prune_tabs
     tree = [node("page tab list", children=[_tab("Gmail"), _tab("Reddit")])]
@@ -250,6 +328,10 @@ def _walk_nodes(nodes):
     for n in nodes:
         yield n
         yield from _walk_nodes(n.get("children") or [])
+
+
+def _walker_text(nodes):
+    return "\n".join(n.get("text") or "" for n in _walk_nodes(nodes))
 
 
 def _role_text(n):
