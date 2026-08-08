@@ -89,6 +89,8 @@ describe("DaySurface #1 request", () => {
         vi.spyOn(window, "confirm").mockReturnValue(false);
         fireEvent.click(screen.getByTestId("delete-frame"));
         await screen.findAllByText(/watch-lane\.tsx/);
+        // cancelled: the frame's URL row still renders (empty dash), not the link
+        expect(screen.getByTestId("frame-source-url-empty")).toBeInTheDocument();
         expect(screen.queryByTestId("frame-source-url")).not.toBeInTheDocument();
     });
 

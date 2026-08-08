@@ -43,7 +43,7 @@ export function FrameMeta({ frame, recapResult, onRunRecap, recapRunning, apps, 
                     <span className="shrink-0 text-faint">source</span>
                     <SourceBadge src={src} />
                 </div>
-                {frame.source_url && (
+                {frame.source_url ? (
                     <div className="flex justify-between gap-2.5">
                         <span className="shrink-0 text-faint">url</span>
                         <a
@@ -56,6 +56,11 @@ export function FrameMeta({ frame, recapResult, onRunRecap, recapRunning, apps, 
                         >
                             {frame.source_url}
                         </a>
+                    </div>
+                ) : (
+                    <div className="flex justify-between gap-2.5" data-testid="frame-source-url-empty">
+                        <span className="shrink-0 text-faint">url</span>
+                        <span className="font-mono text-[11px] text-faint">—</span>
                     </div>
                 )}
                 <Row k="window" v={frame.window_class} mono />
