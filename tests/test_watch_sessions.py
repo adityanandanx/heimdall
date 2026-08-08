@@ -162,7 +162,7 @@ def test_mid_play_track_switch_finalizes_old_and_opens_new_live_row(tmp_path):
     old, new = by_live[0], by_live[1]
     assert old["media_title"] == "Inception (2010)"
     assert old["pos_end"] == 0  # position unknown at a mid-play switch
-    assert old["ranges"] == [[900_000_000, 900_000_000]]
+    assert old["ranges"] == []  # degenerate segment is dropped (#65)
     assert new["media_title"] == "Time"
     assert new["live"] == 1
     assert new["ts_end"] == 0
@@ -182,7 +182,7 @@ def test_watch_poll_persists_on_player_exit(tmp_path):
     assert total == 1
     assert items[0]["live"] == 0
     assert items[0]["pos_end"] == 0  # unknown position at exit
-    assert items[0]["ranges"] == [[900_000_000, 900_000_000]]
+    assert items[0]["ranges"] == []  # degenerate segment is dropped (#65)
     assert daemon._live_rows == {}
 
 
@@ -256,7 +256,7 @@ def test_stop_finalizes_live_row(tmp_path):
     item = items[0]
     assert item["live"] == 0
     assert item["pos_end"] == 0  # MPRIS reports position 0 on stop
-    assert item["ranges"] == [[900_000_000, 900_000_000]]
+    assert item["ranges"] == []  # degenerate segment is dropped (#65)
     assert item["ts_end"] >= item["ts_start"]
     assert daemon._live_rows == {}
 

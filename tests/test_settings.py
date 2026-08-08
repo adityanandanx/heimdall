@@ -305,7 +305,7 @@ def test_forget_endpoint_hard_deletes_windowed_data(tmp_path):
     (tmp_path / "captions" / "abc.json3").write_bytes(b"{}")
     db.insert_frame({"ts": 1_000_000, "monitor": 0, "workspace": "1", "window_class": "x",
                      "window_title": "t", "fullscreen": 0, "trigger": "interval",
-                     "image_path": "1.png", "image_bytes": 1})
+                     "image_path": "frames/1.png", "image_bytes": 1})
     db.insert_watch_session(WatchSession(player="chromium", media_title="m", media_source="s",
                                          media_id="abc", ts_start=1_000_000, ts_end=2_000_000,
                                          pos_start=0, pos_end=500_000, length=500_000))

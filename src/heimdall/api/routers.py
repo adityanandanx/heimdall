@@ -262,6 +262,36 @@ def frame_image(frame_id: int, state: Any = Depends(_state)):
     return FileResponse(image, media_type="image/jpeg")
 
 
+@frames_router.delete("/frames/{frame_id}")
+def frame_delete(frame_id: int, state: Any = Depends(_state)) -> dict:
+    """Delete one captured frame and its image file (#65).
+
+    The FTS row goes with it (after-delete trigger); the JPEG is unlinked
+    after commit — a missing file warns but never rolls the row back.
+    """
+    image_path = state.db.delete_frame(frame_id)
+    if image_path is None:
+        raise HTTPException(status_code=404, detail=f"frame {frame_id} not found")
+    failed = False
+    try:
+        (state.config.data_path / image_path).unlink()
+    except OSError:
+        failed = True
+    return {"ok": True, "frame": frame_id, "image_deleted": not failed, "failure": None}
+
+
+@sessions_router.delete("/sessions/{session_id}")
+def session_delete(session_id: int, state: Any = Depends(_state)) -> dict:
+    """Delete one watch session's row (FTS via trigger) (#65).
+
+    The shared caption-cache file is kept — other sessions of the same video
+    still refetch from it on demand.
+    """
+    if not state.db.delete_watch_session(session_id):
+        raise HTTPException(status_code=404, detail=f"session {session_id} not found")
+    return {"ok": True, "session": session_id}
+
+
 @capture_router.post("/capture")
 def manual_capture(state: Any = Depends(_state)) -> dict:
     """Trigger one capture of the active window now (`heimdall capture`).
@@ -467,6 +497,44 @@ def session_transcript(session_id: int, state: Any = Depends(_state)):
     return JSONResponse(status_code=code, content=body)
 
 
+@sessions_router.post("/sessions/{session_id}/transcript/fetch")
+def session_transcript_fetch(session_id: int, state: Any = Depends(_state)):
+    """Manually (re-)fetch captions for a Chromium session (#65).
+
+    Runs the same yt-dlp captions pipeline the daemon uses at session close —
+    cached on disk, sliced to the session's watched ranges — for sessions that
+    closed without a transcript (extension down, network hiccup). 404 when the
+    session has no media_id to fetch or no caption track is available.
+    """
+    session = state.db.get_watch_session(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail=f"session {session_id} not found")
+    media_id = session.get("media_id")
+    if not media_id:
+        raise HTTPException(
+            status_code=404,
+            detail="session has no resolvable YouTube id (media_id is empty)",
+        )
+    from heimdall.capture.captions import fetch_sliced_captions
+
+    result = fetch_sliced_captions(media_id, session["ranges"],
+                                   state.config.captions_path)
+    if result is None:
+        raise HTTPException(status_code=404, detail="no captions available for this session")
+    state.db.update_session_transcript(
+        session_id,
+        cues_json=result["cues_json"],
+        transcript=result["transcript"],
+        transcript_source="captions",
+    )
+    return {
+        "ok": True,
+        "session": session_id,
+        "transcript_source": "captions",
+        "word_count": len(result["transcript"].split()),
+    }
+
+
 def _active_engine(config: Config) -> str:
     """The engine the capture daemon actually runs (npu|cpu), from its state
     file; falls back to the configured value when the daemon hasn't published
@@ -602,7 +670,7 @@ def forget(payload: ForgetBody, state: Any = Depends(_state)) -> dict:
         categories=payload.categories,
         start_ms=start_ms,
         end_ms=end_ms,
-        frames_path=config.frames_path,
+        data_path=config.data_path,
         captions_path=config.captions_path,
     )
     return {"ok": True, **result}

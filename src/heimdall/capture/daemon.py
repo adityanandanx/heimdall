@@ -195,29 +195,13 @@ class CaptureTools:
     def _transcript_fetch(self, media_id: str, ranges: list) -> Optional[dict]:
         """Sliced captions for one closed session: {cues_json, transcript}.
 
-        Fetches once per media_id (cached on disk under `captions_dir`) and
-        slices to the session's watched sub-ranges — cues sitting entirely in a
-        seek-skipped gap are dropped, never stored. Any failure — network,
-        age-gate, removed, still-live, no track — returns None so the session
-        stays title-only.
+        Shared seam with the API's manual transcript re-fetch (#65) — see
+        ``captions.fetch_sliced_captions``. Any failure returns None so the
+        session stays title-only.
         """
-        from heimdall.capture.captions import (CaptionCache, cues_json,
-                                               cues_to_text, parse_json3,
-                                               slice_cues_to_ranges)
+        from heimdall.capture.captions import fetch_sliced_captions
 
-        if self._caption_cache is None:
-            self._caption_cache = CaptionCache(self.captions_dir)
-        ranges_ms = [[r[0] // 1000, r[1] // 1000] for r in ranges
-                     if r[1] > r[0]]
-        if not ranges_ms:
-            return None
-        events = self._caption_cache.events_for(media_id)
-        if not events:
-            return None
-        cues = slice_cues_to_ranges(parse_json3(events), ranges_ms)
-        if not cues:
-            return None
-        return {"cues_json": cues_json(cues), "transcript": cues_to_text(cues)}
+        return fetch_sliced_captions(media_id, ranges, self.captions_dir)
 
     def socket_lines(self, should_stop: Callable[[], bool]) -> Iterable[str]:
         """Blocking generator of complete socket2 event lines.
@@ -675,11 +659,21 @@ class CaptureDaemon:
             "window_title": meta.get("title"),
             "fullscreen": int(meta.get("fullscreen") or 0),
             "trigger": trigger,
+            "source_url": self._frame_source_url(meta.get("title"), ts),
             "image_path": image_path,
             "image_bytes": len(img),
             "ocr_text": None,
             "ocr_sec": None,
         })
+
+    def _frame_source_url(self, window_title: Optional[str], ts: int) -> Optional[str]:
+        """Tab URL for a browser frame — the extension stream, title-matched
+        like sessions (#64). Wrapped so a dead DB or absent stream never
+        fails the capture."""
+        try:
+            return self.db.url_for_window(window_title or "", ts)
+        except Exception:  # noqa: BLE001
+            return None
 
     def _extract_worker(self) -> None:
         """Extraction queue: route each frame to a11y and/or RapidOCR (#34).

@@ -83,6 +83,7 @@ CREATE TABLE IF NOT EXISTS frames (
     window_title TEXT,
     fullscreen INTEGER,
     trigger TEXT,                     -- activewindow|openwindow|workspace|fullscreen|windowtitle|keepalive|mpris
+    source_url TEXT,                  -- resolved tab URL for browser frames (#64)
     image_path TEXT NOT NULL,         -- relative to the data dir
     image_bytes INTEGER NOT NULL,
     ocr_text TEXT,
@@ -141,7 +142,7 @@ CREATE TABLE IF NOT EXISTS media_stream (
 
 FRAME_COLS = (
     "id", "ts", "monitor", "workspace", "window_class", "window_title",
-    "fullscreen", "trigger", "image_path", "image_bytes", "ocr_text", "ocr_sec",
+    "fullscreen", "trigger", "source_url", "image_path", "image_bytes", "ocr_text", "ocr_sec",
     "a11y_text", "a11y_json", "ocr_engine",
 )
 
@@ -186,7 +187,7 @@ def _migrate_v2(conn: sqlite3.Connection) -> None:
     relaxed (table rebuild) when it still carries the NOT NULL constraint.
     """
     info = {r[1]: r for r in conn.execute("PRAGMA table_info(frames)")}
-    for col in ("a11y_text", "a11y_json", "ocr_engine"):
+    for col in ("a11y_text", "a11y_json", "ocr_engine", "source_url"):
         if col not in info:
             conn.execute(f"ALTER TABLE frames ADD COLUMN {col} TEXT")
     ws_cols = {r[1] for r in conn.execute("PRAGMA table_info(watch_sessions)")}
@@ -245,6 +246,7 @@ def _rebuild_frames_table(conn: sqlite3.Connection) -> None:
             window_title TEXT,
             fullscreen INTEGER,
             trigger TEXT,
+            source_url TEXT,
             image_path TEXT NOT NULL,
             image_bytes INTEGER NOT NULL,
             ocr_text TEXT,
@@ -254,10 +256,10 @@ def _rebuild_frames_table(conn: sqlite3.Connection) -> None:
             ocr_engine TEXT
         );
         INSERT INTO frames_v2 (id, ts, monitor, workspace, window_class,
-            window_title, fullscreen, trigger, image_path, image_bytes,
+            window_title, fullscreen, trigger, source_url, image_path, image_bytes,
             ocr_text, ocr_sec, a11y_text, a11y_json, ocr_engine)
         SELECT id, ts, monitor, workspace, window_class, window_title,
-            fullscreen, trigger, image_path, image_bytes,
+            fullscreen, trigger, source_url, image_path, image_bytes,
             ocr_text, ocr_sec, a11y_text, a11y_json, ocr_engine FROM frames;
         DROP TABLE frames;
         ALTER TABLE frames_v2 RENAME TO frames;
@@ -305,12 +307,13 @@ class Database:
         with self._lock, self.conn() as conn:
             cur = conn.execute(
                 "INSERT INTO frames (ts, monitor, workspace, window_class, window_title,"
-                " fullscreen, trigger, image_path, image_bytes, ocr_text, ocr_sec,"
+                " fullscreen, trigger, source_url, image_path, image_bytes, ocr_text, ocr_sec,"
                 " a11y_text, a11y_json, ocr_engine)"
                 " VALUES (:ts, :monitor, :workspace, :window_class, :window_title,"
-                " :fullscreen, :trigger, :image_path, :image_bytes, :ocr_text, :ocr_sec,"
+                " :fullscreen, :trigger, :source_url, :image_path, :image_bytes, :ocr_text, :ocr_sec,"
                 " :a11y_text, :a11y_json, :ocr_engine)",
                 {**values,
+                 "source_url": values.get("source_url"),
                  "ocr_text": values.get("ocr_text"),
                  "ocr_sec": values.get("ocr_sec"),
                  "a11y_text": values.get("a11y_text"),
@@ -545,6 +548,58 @@ class Database:
             ).fetchall()
             return [dict(r) for r in rows]
 
+    def url_for_window(self, window_title: str, ts: int, max_age_ms: int = 300_000) -> str | None:
+        """The tab URL matching a captured window title (#64).
+
+        The window title and the streamed tab title both appear in trimmed and
+        suffixed spellings ("Uncle Roger" vs "Uncle Roger - YouTube"), so the
+        match tries the raw title and every suffix-stripped variant on both
+        sides. Rows older than ``max_age_ms`` at capture time are ignored so a
+        dormant tab never gets attributed to a fresh frame.
+        """
+        if not window_title:
+            return None
+        suffixes = (" - YouTube", " - YouTube Music")
+        variants = {window_title}
+        for suffix in suffixes:
+            if window_title.endswith(suffix):
+                variants.add(window_title[: -len(suffix)])
+        for candidate in variants:
+            stored = [candidate]
+            for suffix in suffixes:
+                stored.append(candidate + suffix)
+            self.query_count += 1
+            with self._lock, self.conn() as conn:
+                row = conn.execute(
+                    "SELECT href FROM media_stream"
+                    f" WHERE tab_title IN ({', '.join('?' * len(stored))}) AND ts >= ?"
+                    " ORDER BY ts DESC LIMIT 1",
+                    (*stored, ts - max_age_ms),
+                ).fetchone()
+            if row:
+                return row[0]
+        return None
+
+    # ---- deletes (#65: manual session/frame removal) ----
+
+    def delete_frame(self, frame_id: int) -> str | None:
+        """Delete one frame row (FTS via trigger); returns its image path for
+        the caller to unlink after commit, or None when it did not exist."""
+        with self._lock, self.conn() as conn:
+            row = conn.execute("SELECT image_path FROM frames WHERE id = ?", (frame_id,)).fetchone()
+            if row is None:
+                return None
+            conn.execute("DELETE FROM frames WHERE id = ?", (frame_id,))
+            conn.commit()
+            return row[0]
+
+    def delete_watch_session(self, session_id: int) -> bool:
+        """Delete one watch-session row (FTS via trigger); transcript-aware."""
+        with self._lock, self.conn() as conn:
+            cur = conn.execute("DELETE FROM watch_sessions WHERE id = ?", (session_id,))
+            conn.commit()
+            return cur.rowcount > 0
+
     # ---- watch sessions ----
 
     def insert_watch_session(self, session: WatchSession) -> int:
@@ -663,14 +718,16 @@ class Database:
             return _session_item(row) if row else None
 
     def forget(self, *, categories: list[str], start_ms: int, end_ms: int,
-               frames_path: Path, captions_path: Path) -> dict:
+               data_path: Path, captions_path: Path) -> dict:
         """Hard-delete captured data in [start_ms, end_ms) per category (#76).
 
         Categories: "frames" deletes frame rows (FTS via trigger) + frame image
         files; "sessions" deletes watch-session rows (FTS via trigger);
         "transcripts" deletes caption-cache files for sessions in the window.
         Runs in one transaction; files are removed after commit (a file failure
-        warns but never rolls back rows — row consistency wins).
+        warns but never rolls back rows — row consistency wins). ``data_path``
+        is the base for the stored relative image paths (daemon writes
+        ``frames/YYYY/MM/DD/…`` under the data dir).
         """
         self.query_count += 1
         frames = 0
@@ -695,7 +752,7 @@ class Database:
         if "frames" in categories:
             for rel in frame_files:
                 try:
-                    (frames_path / rel).unlink()
+                    (data_path / rel).unlink()
                 except OSError:
                     failed_files.append(str(rel))
         if "transcripts" in categories:
@@ -883,10 +940,38 @@ class Database:
                     "workspaces": workspaces, "monitors": monitors}
 
 
+def sanitize_ranges(ranges: list, length_us: int | None = None) -> list[list[int]]:
+    """Repair watched ranges for display trust (#65).
+
+    Legacy sessions recorded inverted segments (a rewind detected as a seek)
+    and chunks past the video length (restart/stream clock gaps). Each range
+    is swapped when backwards, clamped to [0, length], and dropped when it
+    degenerates to nothing — so coverage never exceeds 100% and the timeline
+    bars always fit the video.
+    """
+    out: list[list[int]] = []
+    limit = length_us if length_us and length_us > 0 else None
+    for pair in ranges:
+        try:
+            a, b = int(pair[0]), int(pair[1])
+        except (TypeError, ValueError, IndexError):
+            continue
+        if a > b:
+            a, b = b, a
+        if limit is not None:
+            a = max(0, min(a, limit))
+            b = max(0, min(b, limit))
+        if b <= a or a < 0 or b <= 1:
+            continue
+        out.append([a, b])
+    return out
+
+
 def _session_item(row: sqlite3.Row) -> dict:
     item = dict(row)
     try:
         item["ranges"] = json.loads(item["ranges"]) if item["ranges"] else []
     except (TypeError, ValueError):
         item["ranges"] = []
+    item["ranges"] = sanitize_ranges(item["ranges"], item.get("length"))
     return item

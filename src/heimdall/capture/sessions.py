@@ -86,6 +86,19 @@ class SessionTracker:
         self.pause_ends_session_s = pause_ends_session_s
         self._open: dict[str, _Open] = {}
 
+    def _op_append_range(self, op: _Open, end_us: int) -> None:
+        """Append the just-watched segment [range_start, end] if any (#65).
+
+        A rewind detected through the poll (position behind the range start)
+        would record an inverted range; those are dropped, and the segment is
+        clamped to the known video length so a restart-clock overshoot never
+        counts past the end of the media.
+        """
+        start_us = max(0, min(op.range_start_us, op.length) if op.length else op.range_start_us)
+        end_us = max(0, min(end_us, op.length) if op.length else end_us)
+        if end_us > start_us:
+            op.ranges.append([start_us, end_us])
+
     def play(self, player: str, *, title, source, position_us: int = 0,
              length_us: int = 0, wall_ms: int = 0, media_id=None) -> Optional[WatchSession]:
         """Open (or resume) a session for the player.
@@ -138,7 +151,7 @@ class SessionTracker:
         op.paused_at_wall_ms = None
         elapsed_s = max(0.0, (wall_ms - op.last_poll_wall_ms) / 1000)
         if is_seek(op.last_poll_pos_us, position_us, elapsed_s):
-            op.ranges.append([op.range_start_us, op.last_poll_pos_us])
+            self._op_append_range(op, op.last_poll_pos_us)
             op.range_start_us = position_us
         op.last_poll_wall_ms = wall_ms
         op.last_poll_pos_us = position_us
@@ -170,7 +183,7 @@ class SessionTracker:
             return None
         elapsed_s = max(0.0, (wall_ms - op.last_poll_wall_ms) / 1000)
         if is_seek(op.last_poll_pos_us, position_us, elapsed_s):
-            op.ranges.append([op.range_start_us, op.last_poll_pos_us])
+            self._op_append_range(op, op.last_poll_pos_us)
             op.range_start_us = position_us
         op.last_poll_wall_ms = wall_ms
         op.last_poll_pos_us = position_us
@@ -182,7 +195,7 @@ class SessionTracker:
         op = self._open.get(player)
         if op is None:
             return
-        op.ranges.append([op.range_start_us, op.last_poll_pos_us])
+        self._op_append_range(op, op.last_poll_pos_us)
         op.range_start_us = position_us
         op.last_poll_pos_us = position_us
         if op.paused_at_wall_ms is None:
@@ -250,7 +263,7 @@ class SessionTracker:
         if op.streak_start_wall_ms is not None:
             op.acc_wall_ms += wall_ms - op.streak_start_wall_ms
         end_pos = position_us if position_us is not None else op.last_poll_pos_us
-        ranges = [*op.ranges, [op.range_start_us, end_pos]]
+        self._op_append_range(op, end_pos)
         closed = WatchSession(
             player=op.player,
             media_title=op.media_title,
@@ -261,7 +274,7 @@ class SessionTracker:
             pos_start=op.pos_start,
             pos_end=position_us if position_us is not None else 0,
             length=op.length,
-            ranges=ranges,
+            ranges=op.ranges,
         )
         del self._open[player]
         return closed

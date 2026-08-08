@@ -273,3 +273,30 @@ class CaptionCache:
 def cues_json(cues: list[Cue]) -> str:
     """The sliced cues as JSON for the session's `cues_json` column."""
     return json.dumps([asdict(c) for c in cues], ensure_ascii=False)
+
+
+def fetch_sliced_captions(media_id: str, ranges: list[list[int]],
+                          captions_dir: Path | None = None,
+                          *, timeout: float = 30) -> Optional[dict]:
+    """Sliced captions for one closed session: {cues_json, transcript} (#65).
+
+    The reusable seam behind both the daemon's attach-at-close and the API's
+    manual re-fetch: caches fetched events on disk under `captions_dir` (when
+    given) and slices them to the session's watched sub-ranges — cues sitting
+    entirely in a seek-skipped gap are dropped, never stored. Any failure —
+    network, age-gate, removed, still-live, no track — returns None so the
+    caller keeps the session title-only.
+    """
+    if captions_dir is not None:
+        events = CaptionCache(captions_dir).events_for(media_id, timeout=timeout)
+    else:
+        events = fetch_events(media_id, timeout=timeout)
+    if not events:
+        return None
+    ranges_ms = [[r[0] // 1000, r[1] // 1000] for r in ranges if r[1] > r[0]]
+    if not ranges_ms:
+        return None
+    cues = slice_cues_to_ranges(parse_json3(events), ranges_ms)
+    if not cues:
+        return None
+    return {"cues_json": cues_json(cues), "transcript": cues_to_text(cues)}

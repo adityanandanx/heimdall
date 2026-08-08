@@ -937,3 +937,104 @@ def test_manual_capture_503_when_daemon_silent(tmp_path, monkeypatch):
         r = client.post("/capture")
     assert r.status_code == 503
     assert "capture daemon not responding" in r.json()["detail"]
+
+
+# ---- #65: manual deletes, transcript re-fetch, tab source_url ----
+
+def _seed_session(db: Database, *, media_id: str | None = None,
+                  ranges: list | None = None) -> int:
+    from heimdall.capture.sessions import WatchSession
+    return db.insert_watch_session(WatchSession(
+        player="chromium",
+        media_title="Uncle Roger Peking Duck",
+        media_source=f"https://www.youtube.com/watch?v={media_id}" if media_id else None,
+        media_id=media_id,
+        ts_start=1_700_000_000_000, ts_end=1_700_000_060_000,
+        pos_start=0, pos_end=30_000_000, length=900_000_000,
+        ranges=ranges if ranges is not None else [[0, 30_000_000]],
+    ))
+
+
+def test_delete_frame_removes_row_and_image(api_client, db, data_dir):
+    frames = db.list_frames(limit=1)[1]
+    fid = frames[0]["id"]
+    rel = frames[0]["image_path"]
+    assert (data_dir / rel).exists()
+    r = api_client.delete(f"/frames/{fid}")
+    assert r.status_code == 200
+    assert r.json()["image_deleted"] is True
+    assert not (data_dir / rel).exists()
+    assert db.get_frame(fid) is None
+    assert api_client.delete(f"/frames/{fid}").status_code == 404
+
+
+def test_default_frames_have_source_url_field(api_client):
+    r = api_client.get("/frames", params={"limit": 1})
+    assert "source_url" in r.json()["items"][0]
+
+
+def test_url_for_window_matches_tab_title_and_stripe_suffix(db):
+    db.upsert_media_stream(href="https://github.com/heimdall", tab_title="heimdall repo",
+                           current_time_us=None, ts=1_700_000_000_000)
+    db.upsert_media_stream(href="https://youtube.com/watch?v=x", tab_title="Uncle Roger - YouTube",
+                           current_time_us=1, ts=1_700_000_010_000)
+    assert db.url_for_window("heimdall repo", 1_700_000_000_500) == "https://github.com/heimdall"
+    assert db.url_for_window("Uncle Roger", 1_700_000_010_500) == "https://youtube.com/watch?v=x"
+    assert db.url_for_window("Uncle Roger", 1_800_000_000_000) is None  # stale tab
+
+
+def test_delete_frame_row_and_image_via_db(db):
+    _total, frames = db.list_frames(limit=1)
+    fid = frames[0]["id"]
+    assert db.delete_frame(999_999) is None
+    assert db.delete_frame(fid) is not None
+    assert db.get_frame(fid) is None
+
+
+def test_delete_session_row_keeps_other_sessions(db):
+    sid = _seed_session(db, media_id="abc", ranges=[[0, 10_000_000]])
+    assert db.delete_watch_session(sid) is True
+    assert db.get_watch_session(sid) is None
+
+
+def test_sessions_ranges_sanitized_on_read(db):
+    sid = _seed_session(db, ranges=[
+        [50_000_000, 30_000_000],       # inverted -> swapped
+        [80_000_000, 5_000_000_000],    # past length -> clamped to length
+        [12_000_000, 12_000_000],       # degenerate -> dropped
+        [0, 4_000_000],                 # fine
+    ])
+    item = db.get_watch_session(sid)
+    assert item["ranges"] == [[30_000_000, 50_000_000],
+                              [80_000_000, 900_000_000],
+                              [0, 4_000_000]]
+
+
+def test_delete_session_endpoint(api_client, db):
+    sid = _seed_session(db, media_id="abc")
+    assert api_client.delete(f"/sessions/{sid}").status_code == 200
+    assert api_client.delete(f"/sessions/{sid}").status_code == 404
+
+
+def test_transcript_fetch_endpoint_attaches_captions(api_client, db, monkeypatch):
+    sid = _seed_session(db, media_id="dQw4w9WgXcQ", ranges=[[0, 60_000_000]])
+    monkeypatch.setattr(
+        "heimdall.capture.captions.fetch_sliced_captions",
+        lambda mid, ranges, cap_dir: {"cues_json": "[]",
+                                      "transcript": "Never gonna give you up"},
+    )
+    r = api_client.post(f"/sessions/{sid}/transcript/fetch")
+    assert r.status_code == 200
+    assert r.json()["word_count"] == 5
+    assert db.get_watch_session(sid)["transcript"] == "Never gonna give you up"
+    assert db.get_watch_session(sid)["transcript_source"] == "captions"
+
+
+def test_transcript_fetch_404_without_media_or_captions(api_client, db, monkeypatch):
+    sid = _seed_session(db, media_id=None)
+    assert api_client.post(f"/sessions/{sid}/transcript/fetch").status_code == 404
+    sid2 = _seed_session(db, media_id="dQw4w9WgXcQ")
+    monkeypatch.setattr("heimdall.capture.captions.fetch_sliced_captions",
+                        lambda *a, **k: None)
+    assert api_client.post(f"/sessions/{sid2}/transcript/fetch").status_code == 404
+    assert api_client.post("/sessions/999999/transcript/fetch").status_code == 404

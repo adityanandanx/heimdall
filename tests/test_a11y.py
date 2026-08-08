@@ -197,3 +197,60 @@ def test_class_hints_fallback_matches_qualified_class_names():
     assert class_hints("md.Obsidian") == ["obsidian", "electron"]
     assert class_hints("obsidian") == ["obsidian", "electron"]
     assert class_hints("net.windmill.windmill") == []  # unknown -> full scan
+
+
+# ---- tab-row pruning (#65: current page only) ----
+
+def _tab(title: str, selected: bool = False) -> dict:
+    return {"role": "page tab", "name": title, "text": title,
+            "states": ["active"] if selected else []}
+
+
+def test_prune_tabs_keeps_only_active_tab():
+    from heimdall.capture.a11y import prune_tabs
+    tree = [
+        node("application", "Google Chrome", children=[
+            node("frame", "youtube - Google Chrome", children=[
+                node("page tab list", children=[
+                    _tab("Gmail"),
+                    _tab("YouTube - Uncle Roger Peking Duck", selected=True),
+                    _tab("Reddit"),
+                ]),
+                node("document", children=[node("paragraph", text="page content")]),
+            ]),
+        ]),
+    ]
+    pruned = prune_tabs(tree)
+    names = list(_walk_names(pruned))
+    assert "Gmail" not in names
+    assert "Reddit" not in names
+    assert "YouTube - Uncle Roger Peking Duck" in names
+    assert any(_role_text(n) == ("paragraph", "page content") for n in _walk_nodes(pruned))
+
+
+def test_prune_tabs_drops_list_with_no_selected_tab():
+    from heimdall.capture.a11y import prune_tabs
+    tree = [node("page tab list", children=[_tab("Gmail"), _tab("Reddit")])]
+    assert prune_tabs(tree) == []
+
+
+def test_prune_tabs_is_noop_without_tab_roles():
+    from heimdall.capture.a11y import prune_tabs
+    tree = [node("document", children=[node("paragraph", text="content")])]
+    assert prune_tabs(tree) == tree
+
+
+def _walk_names(nodes):
+    for n in nodes:
+        yield n["name"]
+        yield from _walk_names(n.get("children") or [])
+
+
+def _walk_nodes(nodes):
+    for n in nodes:
+        yield n
+        yield from _walk_nodes(n.get("children") or [])
+
+
+def _role_text(n):
+    return n.get("role"), n.get("text") or n.get("name")

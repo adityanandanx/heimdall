@@ -91,6 +91,37 @@ def flatten_text(tree: Iterable[dict]) -> str:
     return "\n".join(node_text(n) for n in iter_nodes(tree) if is_content_node(n))
 
 
+def prune_tabs(tree: Iterable[dict]) -> list[dict]:
+    """Keep only the current page inside tab wrappers (#64).
+
+    Browsers expose the tab row as a PageTabList whose children are the tab
+    buttons; the active tab is state-marked `active`. Storing all of them
+    pollutes a11y_text/a11y_json with every open tab's title. This prunes
+    each tab *list* to its active tab (state `active` or `focused`), or drops
+    the list entirely when nothing looks selected. Applied to the walk result
+    before any flatten/serialization.
+    """
+    out: list[dict] = []
+    for node in tree:
+        role = (node.get("role") or "").lower()
+        if role == "page tab list":
+            kept = [c for c in (node.get("children") or [])
+                    if is_tab_selected(c)]
+            if not kept:
+                continue
+            node["children"] = kept
+        children = (node.get("children") or [])
+        if children:
+            node["children"] = prune_tabs(children)
+        out.append(node)
+    return out
+
+
+def is_tab_selected(node: dict) -> bool:
+    states = {s.lower() for s in (node.get("states") or [])}
+    return bool({"active", "focused"} & states)
+
+
 # ---- AT-SPI reader (interface, exercised manually) ----
 
 def _atspi():
@@ -161,7 +192,7 @@ def read_window_tree(window_class: str, window_title: str) -> list[dict] | None:
             best_score, best_tree = score, tree
     if best_tree is None or best_score < 0.55:
         return None
-    return best_tree
+    return prune_tabs(best_tree)
 
 
 def _walk(node, atspi, depth: int, count: int) -> list[dict]:

@@ -310,7 +310,7 @@ def test_daemon_attaches_transcript_to_chromium_session(tmp_path):
     assert items[0]["transcript"] == "Never gonna give you up"
     assert items[0]["cues_json"] == "[]"
     assert items[0]["transcript_source"] == "captions"
-    assert tools.calls == [("dQw4w9WgXcQ", [[0, 0]])]
+    assert tools.calls == [("dQw4w9WgXcQ", [])]  # degenerate segment dropped (#65)
 
 
 def test_daemon_skips_transcript_without_media_id(tmp_path):

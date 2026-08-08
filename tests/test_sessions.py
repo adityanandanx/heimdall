@@ -268,3 +268,27 @@ def test_fmt_video_time():
     assert fmt_video_time(1_200_000_000) == "20:00"
     assert fmt_video_time(7_200_000_000) == "2:00:00"
     assert fmt_video_time(-5) == "0:00"
+
+
+def test_poll_rewind_never_records_inverted_range():
+    """A position behind the range start at a poll is a rewind mid-streak (#65):
+    the closed segment is dropped instead of persisted backwards."""
+    t = SessionTracker()
+    _play(t, wall_ms=0)
+    t.poll(player="vlc", position_us=120_000_000, wall_ms=120_000)
+    t.poll(player="vlc", position_us=60_000_000, wall_ms=121_000)  # rewound 1:00
+    closed = t.stop(player="vlc", position_us=90_000_000, wall_ms=180_000)
+    # the pre-rewind chunk [0, 120s] survives; the rewind span is not inverted
+    assert closed.ranges == [[0, 120_000_000], [60_000_000, 90_000_000]]
+
+
+def test_ranges_clamped_to_known_length():
+    """A65: a restart-clock overshoot must never count past the video end."""
+    t = SessionTracker()
+    _play(t, wall_ms=0, length_us=100_000_000)
+    t.poll(player="vlc", position_us=95_000_000, wall_ms=95_000)
+    t.seek(player="vlc", position_us=200_000_000, wall_ms=180_000)
+    closed = t.stop(player="vlc", position_us=30_000_000, wall_ms=190_000)
+    assert closed.length == 100_000_000
+    # [0, 95s] kept; the post-length seek span is clamped away entirely
+    assert closed.ranges == [[0, 95_000_000]]
