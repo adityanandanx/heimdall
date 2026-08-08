@@ -704,6 +704,38 @@ def test_change_gate_skips_unchanged_keepalive(tmp_path):
     assert daemon.extract_jobs.qsize() == 1  # only the first was extracted
 
 
+def test_keepalive_bypasses_signature_dedupe(tmp_path):
+    """The same window must still be sampled on the keepalive cadence: the
+    signature-dedupe gate applies to event pulses only, so a static page
+    (same class+title+workspace) keeps accumulating frames. The phash change
+    gate still skips re-extraction of the unchanged window."""
+    daemon = _gate_daemon(tmp_path, titles=["zsh — htop", "zsh — htop"])
+    daemon.config.capture.change_gate = False  # isolate the dedupe interaction
+    daemon.jobs.put(("keepalive", 1))
+    daemon.jobs.put(("keepalive", 2))
+    daemon.jobs.put(None)
+    daemon._capture_worker()
+
+    total, frames = daemon.db.list_frames(limit=10)
+    assert total == 2
+
+
+def test_event_pulses_burst_are_deduped(tmp_path):
+    """Event pulses with an unchanged signature are dropped even on a
+    keepalive cadence — a pulse burst after an identical keepalive frame must
+    not store duplicates."""
+    daemon = _gate_daemon(tmp_path, titles=["zsh — htop", "zsh — htop", "zsh — htop"])
+    daemon.config.capture.change_gate = False
+    daemon.jobs.put(("keepalive", 1))
+    daemon.jobs.put(("activewindow", 2))   # same signature -> deduped
+    daemon.jobs.put(("activewindow", 3))   # same signature -> deduped
+    daemon.jobs.put(None)
+    daemon._capture_worker()
+
+    total, _ = daemon.db.list_frames(limit=10)
+    assert total == 1
+
+
 def test_change_gate_event_trigger_re_extracts(tmp_path):
     """The next event-triggered capture re-extracts even for unchanged pixels
     (the gate only applies to keepalive triggers)."""

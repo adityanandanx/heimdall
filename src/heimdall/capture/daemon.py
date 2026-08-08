@@ -607,7 +607,12 @@ class CaptureDaemon:
                 continue
             sig = activewindow_signature(meta)
             with self._lock:
-                if not manual and is_duplicate(sig, self._last_sig):
+                # keepalive is the periodic sampler: it bypasses signature
+                # dedupe (the phash change-gate later skips *re-extraction* of
+                # an unchanged window), so a static page still gets frames on
+                # the keepalive cadence. Event pulses keep dedupe so a burst
+                # of identical pulses doesn't store the same frame repeatedly.
+                if not manual and trigger != "keepalive" and is_duplicate(sig, self._last_sig):
                     continue
                 self._last_sig = sig
             at, size = meta.get("at") or [], meta.get("size") or []
