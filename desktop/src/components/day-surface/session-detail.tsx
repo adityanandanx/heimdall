@@ -79,7 +79,7 @@ export function SessionDetail({ sessions, baseUrl, onClose, onJump, onMutated }:
             onClick={onClose}
         >
             <div
-                className="flex max-h-[80vh] w-[440px] max-w-[92vw] flex-col overflow-hidden rounded-lg border border-line bg-surface shadow-[var(--e2)]"
+                className="flex max-h-[92vh] w-[1200px] max-w-[98vw] flex-col overflow-hidden rounded-lg border border-line bg-surface shadow-[var(--e2)]"
                 onClick={(e) => e.stopPropagation()}
                 role="dialog"
                 aria-modal="true"
@@ -132,15 +132,15 @@ export function SessionDetail({ sessions, baseUrl, onClose, onJump, onMutated }:
                     <Meta k="source" v={main.transcript_source ?? "—"} />
                 </div>
 
-                <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
-                    {cues.length > 0 && (
-                        <section className="mb-4">
-                            <h4 className="mb-2 text-[10px] font-semibold tracking-[1.2px] text-faint uppercase">
-                                Cues
-                            </h4>
-                            <div className="flex flex-col gap-1 rounded-md border border-line bg-surface-2 p-3">
+                <div className="grid min-h-0 flex-1 grid-cols-2 gap-0">
+                    <div className="min-h-0 overflow-y-auto border-r border-line px-5 py-4">
+                        <h4 className="mb-2 text-[10px] font-semibold tracking-[1.2px] text-faint uppercase">
+                            Cues
+                        </h4>
+                        {cues.length > 0 ? (
+                            <div className="flex flex-col gap-1">
                                 {cues.map((c, i) => (
-                                    <div key={i} className="flex gap-2 text-[11px]">
+                                    <div key={i} className="flex gap-2 rounded-sm border-b border-line pb-1 text-[11px] last:border-b-0">
                                         <span className="shrink-0 font-mono text-faint">
                                             {fmtDur(c.startMs / 1000)}
                                         </span>
@@ -148,10 +148,12 @@ export function SessionDetail({ sessions, baseUrl, onClose, onJump, onMutated }:
                                     </div>
                                 ))}
                             </div>
-                        </section>
-                    )}
+                        ) : (
+                            <p className="text-[11px] text-faint">No cues captured.</p>
+                        )}
+                    </div>
 
-                    <section className="mb-4">
+                    <div className="min-h-0 overflow-y-auto px-5 py-4">
                         <div className="mb-2 flex items-center gap-2">
                             <h4 className="text-[10px] font-semibold tracking-[1.2px] text-faint uppercase">
                                 Transcript
@@ -168,20 +170,20 @@ export function SessionDetail({ sessions, baseUrl, onClose, onJump, onMutated }:
                                 </button>
                             )}
                         </div>
+                        {fetchError && (
+                            <p className="mb-1.5 text-[10px] text-danger" data-testid="fetch-transcript-error">
+                                {fetchError}
+                            </p>
+                        )}
                         <p
                             className={cn(
-                                "overflow-y-auto rounded-md border border-line bg-surface-2 p-3 text-[11px] leading-relaxed text-dim",
+                                "rounded-md border border-line bg-surface-2 p-3 text-[11px] leading-relaxed text-dim",
                                 !transcriptText && "text-faint",
                             )}
                         >
                             {transcriptText || "No transcript captured."}
                         </p>
-                        {fetchError && (
-                            <p className="mt-1.5 text-[10px] text-danger" data-testid="fetch-transcript-error">
-                                {fetchError}
-                            </p>
-                        )}
-                    </section>
+                    </div>
                 </div>
 
                 <div className="flex gap-2 border-t border-line p-3.5">
