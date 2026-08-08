@@ -59,12 +59,11 @@ export function DaySurface({ baseUrl, day, onDayChange, onOpenSearch, seek, onSe
     const qc = useQueryClient();
     const [deleteBusy, setDeleteBusy] = useState(false);
 
-    const framesQ = useDayFrames(
-        baseUrl,
-        day,
-        followLive && day === dayStrOf(new Date()) ? FOLLOW_POLL_MS : false,
-    );
-    const sessionsQ = useDaySessions(baseUrl, day);
+    const isToday = day === dayStrOf(new Date());
+    // Live data: today's day view always polls (follow just steers the view);
+    // it never polls for past days (#1 live-capture fix).
+    const framesQ = useDayFrames(baseUrl, day, isToday ? FOLLOW_POLL_MS : false);
+    const sessionsQ = useDaySessions(baseUrl, day, isToday ? FOLLOW_POLL_MS : false);
     const statusQ = useStatus(baseUrl);
     const recap = useRunPipe(baseUrl, day);
 

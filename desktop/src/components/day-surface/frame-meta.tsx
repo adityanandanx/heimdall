@@ -32,9 +32,9 @@ export function FrameMeta({ frame, recapResult, onRunRecap, recapRunning, apps, 
                     onClick={onDeleteFrame}
                     disabled={deleteBusy}
                     data-testid="delete-frame"
-                    className="rounded-sm border border-transparent px-1.5 py-0.5 font-mono text-[10px] text-faint transition-colors hover:border-danger/40 hover:text-danger disabled:opacity-40"
+                    className="rounded-sm border border-danger/40 bg-danger/10 px-2 py-0.5 font-mono text-[10px] text-danger transition-colors hover:bg-danger/25 disabled:opacity-40"
                 >
-                    {deleteBusy ? "deleting…" : "delete"}
+                    {deleteBusy ? "deleting…" : "delete frame"}
                 </button>
             </div>
             <div className="flex flex-col gap-2 rounded-md border border-line bg-surface-2 p-3 text-xs">
@@ -79,7 +79,7 @@ export function FrameMeta({ frame, recapResult, onRunRecap, recapRunning, apps, 
             </div>
 
             <h2 className="mb-2.5 mt-6 text-[11px] tracking-[1.2px] text-faint uppercase">OCR text</h2>
-            <OcrBox text={text} />
+            <OcrBox frame={frame} text={text} />
 
             <h2 className="mb-2.5 mt-6 text-[11px] tracking-[1.2px] text-faint uppercase">Recap</h2>
             <div className="rounded-md border border-primary/25 bg-primary/7 p-3">
@@ -185,11 +185,21 @@ export function SourceBadge({ src }: { src: "a11y" | "ocr" | "none" }) {
     );
 }
 
-function OcrBox({ text }: { text: string }) {
+function OcrBox({ frame, text }: { frame: Frame; text: string }) {
     const [copied, setCopied] = useState(false);
+    const status = !text
+        ? frame.ocr_sec != null
+            ? `OCR ran ${frame.ocr_sec.toFixed(1)}s (${frame.ocr_engine ?? "engine"}) — read nothing`
+            : "a11y tree was empty · OCR not invoked"
+        : null;
     return (
         <div className="relative rounded-md border border-line bg-surface-2 p-3 text-xs text-dim">
-            {text || "No captured text for this frame."}
+            {text || "No text captured for this frame."}
+            {status && (
+                <div className="mt-1.5 border-t border-line pt-1.5 text-[10px] text-faint">
+                    {status}
+                </div>
+            )}
             <button
                 type="button"
                 onClick={() => {
@@ -201,7 +211,8 @@ function OcrBox({ text }: { text: string }) {
                         /* clipboard unavailable */
                     }
                 }}
-                className="absolute top-1.5 right-1.5 rounded-sm border border-line bg-surface px-2 py-0.5 font-mono text-[10px] text-dim transition-colors hover:border-primary hover:text-foreground"
+                disabled={!text}
+                className="absolute top-1.5 right-1.5 rounded-sm border border-line bg-surface px-2 py-0.5 font-mono text-[10px] text-dim transition-colors hover:border-primary hover:text-foreground disabled:opacity-40"
             >
                 {copied ? "copied" : "copy"}
             </button>

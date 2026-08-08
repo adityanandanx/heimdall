@@ -172,8 +172,41 @@ def init_db(path: str | os.PathLike) -> None:
     conn = connect(path)
     conn.executescript(SCHEMA)
     _migrate_v2(conn)
+    _backfill_source_urls(conn)
     conn.commit()
     conn.close()
+
+
+def _backfill_source_urls(conn: sqlite3.Connection) -> None:
+    """Best-effort one-time attribution of window titles to source URLs.
+
+    Frames captured before the frames_v2 rebuild never got a source_url; the
+    extension's media_stream rows already exist, so during startup we attach
+    the latest matching tab URL (same title ± " - YouTube" suffix) that was
+    live within 5 minutes of the capture. Idempotent via the NULL guard.
+    """
+    has_null = conn.execute(
+        "SELECT 1 FROM frames f WHERE f.source_url IS NULL AND f.window_title IS NOT NULL"
+        " AND f.window_title != '' LIMIT 1"
+    ).fetchone()
+    has_stream = conn.execute("SELECT 1 FROM media_stream LIMIT 1").fetchone()
+    if not (has_null and has_stream):
+        return
+    conn.execute(
+        """
+        UPDATE frames SET source_url = (
+            SELECT m.href FROM media_stream m
+            WHERE m.ts >= frames.ts - 300000 AND m.ts <= frames.ts + 300000
+              AND (
+                  m.tab_title = frames.window_title
+               OR m.tab_title = frames.window_title || ' - YouTube'
+               OR m.tab_title = frames.window_title || ' - YouTube Music'
+              )
+            ORDER BY m.ts DESC LIMIT 1
+        )
+        WHERE source_url IS NULL AND window_title IS NOT NULL AND window_title != ''
+        """
+    )
 
 
 def _migrate_v2(conn: sqlite3.Connection) -> None:

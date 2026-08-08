@@ -234,10 +234,10 @@ export function Filmstrip({ baseUrl, frames, sessions, selected, onSelect, onMed
                 ref={scrollRef}
                 className="overflow-x-auto overflow-y-hidden pb-1.5 [scrollbar-width:thin]"
             >
-                <div className="relative" style={{ width: contentW + padEnd }}>
+                <div className="relative pt-4" style={{ width: contentW + padEnd }}>
                     <div
                         ref={timelineRef}
-                        className="relative cursor-pointer touch-none overflow-hidden rounded-md bg-[color-mix(in_srgb,var(--background)_85%,var(--surface-2))] select-none"
+                        className="relative cursor-pointer touch-none rounded-md bg-[color-mix(in_srgb,var(--background)_85%,var(--surface-2))] select-none"
                         style={{ width: contentW, height: timelineH }}
                         data-testid="filmstrip-timeline"
                         onPointerDown={(e) => {
@@ -364,23 +364,26 @@ export function Filmstrip({ baseUrl, frames, sessions, selected, onSelect, onMed
                         })}
 
                         {selected && axis.length > 0 && (
-                            <>
-                                <div
-                                    className="pointer-events-none absolute top-[-4px] bottom-[-4px] z-10 w-0.5 bg-primary"
-                                    style={{ left: axisOf(axis, selected.ts) }}
-                                >
-                                    <div className="absolute top-[-3px] left-1/2 h-0 w-0 -translate-x-1/2 border-x-[5px] border-t-[6px] border-x-transparent border-t-primary" />
-                                </div>
-                                <div
-                                    data-testid="playhead-time"
-                                    className="pointer-events-none absolute top-1 z-20 -translate-x-1/2 rounded-sm border border-primary/50 bg-background/95 px-1 font-mono text-[10px] leading-4 whitespace-nowrap text-primary shadow-[var(--e1)]"
-                                    style={{ left: axisOf(axis, selected.ts) }}
-                                >
-                                    {formatTimeS(selected.ts)}
-                                </div>
-                            </>
+                            <div
+                                className="pointer-events-none absolute top-[-4px] bottom-[-4px] z-10 w-0.5 bg-primary"
+                                style={{ left: axisOf(axis, selected.ts) }}
+                            >
+                                <div className="absolute top-[-3px] left-1/2 h-0 w-0 -translate-x-1/2 border-x-[5px] border-t-[6px] border-x-transparent border-t-primary" />
+                            </div>
                         )}
                     </div>
+
+                    {/* Exact-time label: rendered in the gutter above the
+                        timeline so it never overlaps the frame dots (#1). */}
+                    {selected && axis.length > 0 && (
+                        <div
+                            data-testid="playhead-time"
+                            className="pointer-events-none absolute top-0 z-20 -translate-x-1/2 whitespace-nowrap rounded-sm border border-line bg-background/95 px-1 font-mono text-[10px] leading-4 text-primary shadow-[var(--e1)]"
+                            style={{ left: axisOf(axis, selected.ts) }}
+                        >
+                            {formatTimeS(selected.ts)}
+                        </div>
+                    )}
                 </div>
             </div>
 

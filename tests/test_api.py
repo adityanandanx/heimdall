@@ -12,6 +12,7 @@ from heimdall.config import Config
 from heimdall.timeutil import day_bounds, ts_to_iso
 
 from conftest import FIXTURE_DAY, BREAKDOWN_COMPLETION, RECAP_COMPLETION, build_day_db, mock_llm_response
+from heimdall.db import init_db
 
 
 # ---- /health ----
@@ -1038,3 +1039,35 @@ def test_transcript_fetch_404_without_media_or_captions(api_client, db, monkeypa
                         lambda *a, **k: None)
     assert api_client.post(f"/sessions/{sid2}/transcript/fetch").status_code == 404
     assert api_client.post("/sessions/999999/transcript/fetch").status_code == 404
+
+
+def _find_frame(db, title):
+    """The fixture frame whose window_title matches `title` (a substring)."""
+    _, items = db.list_frames(limit=200)
+    hit = next(f for f in items if f["window_title"] == title)
+    return hit["id"], hit["ts"]
+
+
+def test_source_url_backfill_attaches_historic_tab_url(db):
+    """Frames captured before the source_url feature get best-effort links on
+    the next startup: the media_stream row with a matching tab title (raw or
+    " - YouTube" suffixed) within +-5 min wins, newest first."""
+    init_db(db.path)  # startup: _backfill_source_urls runs on the fixture DB
+    yt_id, yt_ts = _find_frame(db, "youtube.com/watch?v=dQw4w9WgXcQ")
+    db.upsert_media_stream(
+        href="https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+        tab_title="youtube.com/watch?v=dQw4w9WgXcQ - YouTube",
+        current_time_us=0,
+        ts=yt_ts,
+    )
+    # same title but stale (6 minutes before the frame) -> must NOT attach
+    code_id, code_ts = _find_frame(db, "capture.py — heimdall")
+    db.upsert_media_stream(
+        href="https://github.com/heimdall/capture.py",
+        tab_title="capture.py — heimdall",
+        current_time_us=0,
+        ts=code_ts - 360_000,
+    )
+    init_db(db.path)  # second startup backfills the NULLs
+    assert db.get_frame(yt_id)["source_url"] == "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+    assert db.get_frame(code_id)["source_url"] is None

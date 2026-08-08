@@ -1,12 +1,16 @@
-import { fireEvent, screen, within } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { SessionsSurface } from "./sessions-surface";
-import { base } from "@/test/msw/handlers";
+import { base, resetFixtures } from "@/test/msw/handlers";
 import { renderWithQuery } from "@/test/render";
 
 const details = () => screen.getByRole("region", { name: "video details" });
 
 describe("SessionsSurface", () => {
+    afterEach(() => {
+        vi.restoreAllMocks();
+        resetFixtures();
+    });
     it("shows details of the most recent video in the right pane by default", async () => {
         renderWithQuery(<SessionsSurface baseUrl={base} />);
 
@@ -131,5 +135,56 @@ describe("SessionsSurface", () => {
         });
         fireEvent.click(card);
         expect(within(details()).getByText("No transcript captured.")).toBeInTheDocument();
+    });
+
+    it("fetches a missing transcript for a stream-backed session (#1)", async () => {
+        renderWithQuery(<SessionsSurface baseUrl={base} />);
+
+        const card = await screen.findByRole("button", {
+            name: "Some dev video — view details",
+        });
+        fireEvent.click(card);
+        const fetchBtn = within(details()).getByRole("button", {
+            name: "⟳ fetch transcript",
+        });
+        fireEvent.click(fetchBtn);
+        expect(await screen.findByText(/transcript · fetch · 5 words/)).toBeInTheDocument();
+        expect(
+            within(details()).queryByRole("button", { name: "⟳ fetch transcript" }),
+        ).not.toBeInTheDocument();
+    });
+
+    it("deletes a session after confirm and refreshes the list (#1)", async () => {
+        vi.spyOn(window, "confirm").mockReturnValue(true);
+        renderWithQuery(<SessionsSurface baseUrl={base} />);
+
+        const card = await screen.findByRole("button", {
+            name: "Some dev video — view details",
+        });
+        fireEvent.click(card);
+        fireEvent.click(
+            within(details()).getByRole("button", { name: "delete session 22" }),
+        );
+        await waitFor(() =>
+            expect(
+                screen.queryByRole("button", { name: "Some dev video — view details" }),
+            ).not.toBeInTheDocument(),
+        );
+    });
+
+    it("keeps the session when delete is cancelled (#1)", async () => {
+        vi.spyOn(window, "confirm").mockReturnValue(false);
+        renderWithQuery(<SessionsSurface baseUrl={base} />);
+
+        const card = await screen.findByRole("button", {
+            name: "Some dev video — view details",
+        });
+        fireEvent.click(card);
+        fireEvent.click(
+            within(details()).getByRole("button", { name: "delete session 22" }),
+        );
+        expect(
+            screen.getByRole("button", { name: "Some dev video — view details" }),
+        ).toBeInTheDocument();
     });
 });

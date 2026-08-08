@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
-import { ExternalLink } from "lucide-react";
+import { useQueryClient } from "@tanstack/react-query";
+import { ExternalLink, LoaderCircle, Trash2 } from "lucide-react";
 import { formatTime, relTime } from "@/lib/format";
 import { fmtDur, playerColor, sessionWatchedSec } from "@/lib/timeline";
 import {
@@ -11,10 +12,18 @@ import {
     type CueSegment,
     type VideoGroup,
 } from "@/lib/watch-sessions";
+import { deleteSession, fetchSessionTranscript, type Session } from "@/lib/api";
 import { useRecentSessions } from "@/hooks/use-day-browser";
 import { openExternal } from "@/lib/open";
 import { AppChip } from "@/components/app-chip";
 import { cn } from "@/lib/utils";
+
+/** Percent of the video length for a range edge, clamped to 0..100 so
+ *  corrupt/legacy ranges can never overflow the timeline bar. */
+function edgePct(v: VideoGroup, us: number): number {
+    if (v.lengthUs <= 0) return 0;
+    return Math.min(100, Math.max(0, (us / v.lengthUs) * 100));
+}
 
 interface SessionsSurfaceProps {
     baseUrl: string;
@@ -22,6 +31,7 @@ interface SessionsSurfaceProps {
 
 export function SessionsSurface({ baseUrl }: SessionsSurfaceProps) {
     const { data, isLoading } = useRecentSessions(baseUrl, 7);
+    const qc = useQueryClient();
 
     const groups = useMemo(() => groupSessionsBySource(data ?? []), [data]);
     const [selectedKey, setSelectedKey] = useState<string | null>(null);
@@ -33,6 +43,10 @@ export function SessionsSurface({ baseUrl }: SessionsSurfaceProps) {
 
     const openVideo = (v: VideoGroup) => {
         if (v.openUrl) void openExternal(v.openUrl);
+    };
+
+    const onMutated = () => {
+        void qc.invalidateQueries({ queryKey: ["recent-sessions", baseUrl] });
     };
 
     return (
@@ -75,7 +89,12 @@ export function SessionsSurface({ baseUrl }: SessionsSurfaceProps) {
 
                     <div className="flex w-[340px] shrink-0 flex-col overflow-y-auto rounded-lg border border-line bg-surface">
                         {selected && (
-                            <VideoDetails video={selected} onOpen={() => openVideo(selected)} />
+                            <VideoDetails
+                                video={selected}
+                                baseUrl={baseUrl}
+                                onOpen={() => openVideo(selected)}
+                                onMutated={onMutated}
+                            />
                         )}
                     </div>
                 </div>
@@ -159,8 +178,8 @@ function VideoCard({
                             key={i}
                             className="absolute top-0 h-full rounded-full bg-primary/60"
                             style={{
-                                left: `${(s / v.lengthUs) * 100}%`,
-                                width: `${((e - s) / v.lengthUs) * 100}%`,
+                                left: `${edgePct(v, s)}%`,
+                                width: `${Math.max(0, edgePct(v, e) - edgePct(v, s))}%`,
                             }}
                         />
                     ))}
@@ -169,7 +188,7 @@ function VideoCard({
                         v.lastPosUs <= v.lengthUs && (
                             <div
                                 className="absolute top-[-2px] h-[10px] w-[2px] bg-foreground"
-                                style={{ left: `${(v.lastPosUs / v.lengthUs) * 100}%` }}
+                                style={{ left: `${edgePct(v, v.lastPosUs)}%` }}
                             />
                         )}
                 </div>
@@ -180,7 +199,49 @@ function VideoCard({
     );
 }
 
-function VideoDetails({ video: v, onOpen }: { video: VideoGroup; onOpen: () => void }) {
+function VideoDetails({
+    video: v,
+    baseUrl,
+    onOpen,
+    onMutated,
+}: {
+    video: VideoGroup;
+    baseUrl: string;
+    onOpen: () => void;
+    onMutated: () => void;
+}) {
+    const [deleteId, setDeleteId] = useState<number | null>(null);
+    const [fetching, setFetching] = useState<number | null>(null);
+    const [fetchError, setFetchError] = useState<string | null>(null);
+
+    const del = async (s: Session) => {
+        if (deleteId !== null) return;
+        if (!window.confirm(`Delete this "${s.media_title ?? "watch"}" session?`)) return;
+        setDeleteId(s.id);
+        try {
+            await deleteSession(baseUrl, s.id);
+            onMutated();
+        } catch (e) {
+            console.error(e);
+        } finally {
+            setDeleteId(null);
+        }
+    };
+
+    const fetchT = async (s: Session) => {
+        if (fetching !== null) return;
+        setFetching(s.id);
+        setFetchError(null);
+        try {
+            await fetchSessionTranscript(baseUrl, s.id);
+            onMutated();
+        } catch (e) {
+            setFetchError(e instanceof Error ? e.message : String(e));
+        } finally {
+            setFetching(null);
+        }
+    };
+
     return (
         <div role="region" aria-label="video details" className="flex flex-col gap-3 p-4">
             <div className="flex min-w-0 items-start gap-2">
@@ -243,8 +304,8 @@ function VideoDetails({ video: v, onOpen }: { video: VideoGroup; onOpen: () => v
                             key={i}
                             className="absolute top-0 h-full rounded-full bg-primary/60"
                             style={{
-                                left: `${(s / v.lengthUs) * 100}%`,
-                                width: `${((e - s) / v.lengthUs) * 100}%`,
+                                left: `${edgePct(v, s)}%`,
+                                width: `${Math.max(0, edgePct(v, e) - edgePct(v, s))}%`,
                             }}
                         />
                     ))}
@@ -253,7 +314,7 @@ function VideoDetails({ video: v, onOpen }: { video: VideoGroup; onOpen: () => v
                         v.lastPosUs <= v.lengthUs && (
                             <div
                                 className="absolute top-[-2px] h-[12px] w-[2px] bg-foreground"
-                                style={{ left: `${(v.lastPosUs / v.lengthUs) * 100}%` }}
+                                style={{ left: `${edgePct(v, v.lastPosUs)}%` }}
                             />
                         )}
                 </div>
@@ -263,22 +324,67 @@ function VideoDetails({ video: v, onOpen }: { video: VideoGroup; onOpen: () => v
                 Sessions
             </div>
             <ul className="flex flex-col gap-2">
-                {v.sessions.map((s) => (
-                    <li key={s.id} className="rounded-md border border-line px-2.5 py-2">
-                        <div className="flex items-center justify-between gap-2">
-                            <span className="text-[10px] text-dim">{formatTime(s.ts_start)}</span>
-                            {s.live === 1 && (
-                                <span className="flex items-center gap-1 text-[9px] text-danger">
-                                    <span className="h-1 w-1 rounded-full bg-danger" /> LIVE
+                {v.sessions.map((s) => {
+                    const words = (s.transcript ?? "").split(/\s+/).filter(Boolean).length;
+                    return (
+                        <li key={s.id} className="rounded-md border border-line px-2.5 py-2">
+                            <div className="flex items-center justify-between gap-2">
+                                <span className="text-[10px] text-dim">{formatTime(s.ts_start)}</span>
+                                {s.live === 1 && (
+                                    <span className="flex items-center gap-1 text-[9px] text-danger">
+                                        <span className="h-1 w-1 rounded-full bg-danger" /> LIVE
+                                    </span>
+                                )}
+                                <span className="flex items-center gap-2">
+<span className="text-[10px] text-dim">
+                                        watched {fmtDur(sessionWatchedSec(s))}
+                                    </span>
+                                    <button
+                                        type="button"
+                                        onClick={() => void del(s)}
+                                        disabled={deleteId !== null}
+                                        aria-label={`delete session ${s.id}`}
+                                        className="rounded-sm border border-transparent p-0.5 text-faint transition-colors hover:border-danger/40 hover:text-danger disabled:opacity-40"
+                                    >
+                                        <Trash2 className="size-3" />
+                                    </button>
                                 </span>
-                            )}
-                            <span className="text-[10px] text-dim">
-                                watched {fmtDur(sessionWatchedSec(s))}
-                            </span>
-                        </div>
-                    </li>
-                ))}
+                            </div>
+                            <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                                {s.transcript ? (
+                                    <span className="text-[9px] text-dim">
+                                        transcript · {s.transcript_source ?? "captions"} · {words.toLocaleString()} words
+                                    </span>
+                                ) : s.media_id ? (
+                                    <button
+                                        type="button"
+                                        onClick={() => void fetchT(s)}
+                                        disabled={fetching !== null}
+                                        className="flex items-center gap-1 rounded border border-line px-1.5 py-px font-mono text-[9px] text-dim transition-colors hover:border-primary hover:text-foreground disabled:opacity-40"
+                                    >
+                                        {fetching === s.id ? (
+                                            <LoaderCircle className="size-2.5 animate-spin" />
+                                        ) : null}
+                                        ⟳ fetch transcript
+                                    </button>
+                                ) : (
+                                    <span className="text-[9px] text-faint">
+                                        no transcript — no stream source recorded
+                                    </span>
+                                )}
+                                {deleteId === s.id && (
+                                    <span className="text-[9px] text-danger">deleting…</span>
+                                )}
+                            </div>
+                        </li>
+                    );
+                })}
             </ul>
+            {fetchError && (
+                <p className="mt-1.5 text-[10px] text-danger" data-testid="fetch-transcript-error">
+                    {fetchError}
+                </p>
+            )}
 
             <div className="mt-1 text-[10px] font-semibold tracking-[0.12em] text-faint uppercase">
                 Transcript

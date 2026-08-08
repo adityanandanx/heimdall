@@ -19,17 +19,18 @@ export function useDayFrames(
         queryKey: ["day-frames", baseUrl, day],
         queryFn: () => fetchDayFrames(baseUrl, day),
         enabled: !!baseUrl && !!day,
-        refetchOnWindowFocus: false,
+        refetchOnWindowFocus: true,
         refetchInterval: refetchIntervalMs || false,
     });
 }
 
-export function useDaySessions(baseUrl: string, day: string) {
+export function useDaySessions(baseUrl: string, day: string, refetchIntervalMs: number | false = false) {
     return useQuery({
         queryKey: ["day-sessions", baseUrl, day],
         queryFn: () => fetchDaySessions(baseUrl, day),
         enabled: !!baseUrl && !!day,
-        refetchOnWindowFocus: false,
+        refetchOnWindowFocus: true,
+        refetchInterval: refetchIntervalMs || false,
     });
 }
 
