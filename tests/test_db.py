@@ -74,6 +74,21 @@ def test_fts_syncs_on_delete(db):
     assert total == 0
 
 
+def test_search_prefixes_partial_words(db):
+    start, _ = day_bounds(FIXTURE_DAY)
+    db.insert_frame(dict(ts=start + 200 * 60_000, monitor=0, workspace=2,
+                         window_class="browser", window_title="museum of memes",
+                         fullscreen=0, trigger="keepalive", image_path="m.jpg",
+                         image_bytes=1, ocr_text="guided tour of the museum of art", ocr_sec=1.0))
+    # A bare fragment is a prefix: "museu" matches the token "museum".
+    assert any("museum" in it["window_title"] for it in db.search("museu")[1])
+    assert any("museum" in it["window_title"] for it in db.search("muse")[1])
+    # Quoted text stays an exact phrase: no token is literally "muse".
+    assert db.search('"muse"')[0] == 0
+    # FTS operators keep working alongside prefix terms.
+    assert db.search("museu OR youtube")[0] >= 1
+
+
 def test_search_boosts_title_over_ocr(db):
     start, _ = day_bounds(FIXTURE_DAY)
     db.insert_frame(dict(ts=start + 200 * 60_000, monitor=0, workspace=2,

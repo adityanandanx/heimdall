@@ -497,7 +497,7 @@ class Database:
         where, params = [], []
         if query:
             where.append("frames_fts MATCH ?")
-            params.append(query)
+            params.append(fts_query(query))
         if window_class is not None:
             where.append("f.window_class = ?")
             params.append(window_class)
@@ -840,7 +840,7 @@ class Database:
         """
         self.query_count += 1
         where = ["watch_sessions_fts MATCH ?"] if query else []
-        params = [query] if query else []
+        params = [fts_query(query)] if query else []
         if player is not None:
             where.append("s.player = ?")
             params.append(player)
@@ -922,7 +922,7 @@ class Database:
                 source = "frames_fts JOIN frames f ON f.id = frames_fts.rowid"
                 if query:
                     base_clauses.append("frames_fts MATCH ?")
-                    base_params.append(query)
+                    base_params.append(fts_query(query))
                 if start is not None:
                     base_clauses.append("f.ts >= ?")
                     base_params.append(start)
@@ -978,7 +978,7 @@ class Database:
                           " ON s.id = watch_sessions_fts.rowid")
                 if query:
                     clauses.append("watch_sessions_fts MATCH ?")
-                    params.append(query)
+                    params.append(fts_query(query))
                 if start is not None:
                     clauses.append("s.ts_start >= ?")
                     params.append(start)
@@ -997,6 +997,40 @@ class Database:
                 players = [dict(r) for r in rows]
             return {"apps": apps, "players": players,
                     "workspaces": workspaces, "monitors": monitors}
+
+
+def fts_query(text: str) -> str:
+    """Free text -> FTS5 MATCH with prefix matching on bare words.
+
+    FTS5 token matching is exact: ``museu`` finds only the token ``museu``,
+    never ``museum``. Users type fragments, so every unquoted word becomes a
+    prefix term (``museu`` → ``museu*``). Quoted phrases stay literal and
+    exact (no prefix), and the FTS5 operators AND/OR/NOT keep their meaning
+    — a bare ``*`` already typed by the user is not doubled.
+    """
+    out: list[str] = []
+    i, n = 0, len(text)
+    while i < n:
+        ch = text[i]
+        if ch == '"':
+            end = text.find('"', i + 1)
+            out.append(text[i : end + 1] if end != -1 else text[i:])
+            i = n if end == -1 else end + 1
+        elif ch.isalnum():
+            j = i
+            while j < n and text[j].isalnum():
+                j += 1
+            term = text[i:j]
+            if term.upper() in ("AND", "OR", "NOT"):
+                out.append(term)
+            else:
+                out.append(term + "*")
+            i = j
+        else:
+            if ch != "*":
+                out.append(ch)
+            i += 1
+    return "".join(out)
 
 
 def sanitize_ranges(ranges: list, length_us: int | None = None) -> list[list[int]]:
