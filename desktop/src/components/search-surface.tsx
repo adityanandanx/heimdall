@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef } from "react";
+import { Fragment, memo, useCallback, useDeferredValue, useEffect, useMemo, useRef } from "react";
 import type { SearchItem } from "@/lib/api";
 import { frameImageUrl } from "@/lib/api";
 import { relTime } from "@/lib/format";
@@ -175,6 +175,11 @@ export function SearchSurface({ baseUrl, focusNonce, seed, onPick }: SearchSurfa
     };
 
     const query = parsed.text;
+    // Keep the heavy results grid on a lagged copy of the query: during a
+    // typing burst the cards keep the previous props (memoized → skipped),
+    // so the keystroke render stays small and the input echoes instantly;
+    // the highlight catches up once typing settles.
+    const deferredQuery = useDeferredValue(query);
     const chips = useMemo(() => activeChips(filters), [filters]);
     // Same gate the fetch hook uses (on raw state, so clearing filters hides
     // stale results instantly rather than after the debounce).
@@ -374,7 +379,7 @@ export function SearchSurface({ baseUrl, focusNonce, seed, onPick }: SearchSurfa
                 <div className="flex flex-col gap-3">
                     <div className="grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] items-start gap-3">
                         {(filtered ?? []).map((item) => (
-                            <ResultCard key={`${item.kind}-${item.id}`} item={item} query={query} baseUrl={baseUrl} onPick={onPick} />
+                            <ResultCard key={`${item.kind}-${item.id}`} item={item} query={deferredQuery} baseUrl={baseUrl} onPick={onPick} />
                         ))}
                         {filtered && filtered.length === 0 && (
                             <p className="col-span-full text-xs text-dim">No matches.</p>
@@ -408,7 +413,11 @@ export function SearchSurface({ baseUrl, focusNonce, seed, onPick }: SearchSurfa
     );
 }
 
-function ResultCard({
+/** Memoized per-item card. `query` is the deferred query — during typing
+ *  bursts it stays at the previous value, so (combined with the custom
+ *  comparator ignoring it) cards skip re-rendering entirely; they re-render
+ *  only when their item changes (new result set). */
+const ResultCard = memo(function ResultCard({
     item,
     query,
     baseUrl,
@@ -479,9 +488,22 @@ function ResultCard({
                         {item.kind === "frame" ? `score ${item.score.toFixed(2)}` : "watch session"}
                     </span>
                 </div>
-            </div>
+</div>
         </button>
     );
+}, arePropsEqual);
+
+function arePropsEqual(
+    prev: { item: SearchItem; query: string; baseUrl: string; onPick: (item: SearchItem) => void },
+    next: { item: SearchItem; query: string; baseUrl: string; onPick: (item: SearchItem) => void },
+): boolean {
+    // The query is only used for snippet highlight; deferring it means cards
+    // with the same item+base render nothing while the user types. The query
+    // comparison shifts with the deferred value + staleTime, highlight stays.
+    if (prev.item !== next.item) return false;
+    if (prev.baseUrl !== next.baseUrl) return false;
+    if (prev.onPick !== next.onPick) return false;
+    return true;
 }
 
 function SortOption({ active, label, onClick }: { active: boolean; label: string; onClick: () => void }) {
