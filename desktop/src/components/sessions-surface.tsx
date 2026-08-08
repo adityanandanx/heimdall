@@ -97,6 +97,35 @@ export function SessionsSurface({ baseUrl }: SessionsSurfaceProps) {
                             />
                         )}
                     </div>
+
+                    <div className="flex w-[400px] shrink-0 flex-col overflow-hidden rounded-lg border border-line bg-surface">
+                        {selected ? (
+                            <>
+                                <div className="flex items-center gap-2 border-b border-line px-4 py-3">
+                                    <span className="text-[10px] font-semibold tracking-[0.12em] text-faint uppercase">
+                                        Transcript
+                                    </span>
+                                    {selected.words > 0 && (
+                                        <span className="rounded-full border border-line px-1.5 py-px text-[9px] text-dim">
+                                            {selected.words.toLocaleString()} words
+                                        </span>
+                                    )}
+                                </div>
+                                <div className="min-h-0 flex-1 overflow-y-auto p-4" data-testid="transcript-pane">
+                                    <Transcript
+                                        cues={unifiedCues(selected.sessions)}
+                                        text={selected.sessions
+                                            .map((s) => s.transcript ?? "")
+                                            .filter(Boolean)
+                                            .join(" ")}
+                                        seekUrl={isYoutubeUrl(selected.openUrl) ? selected.openUrl : null}
+                                    />
+                                </div>
+                            </>
+                        ) : (
+                            <p className="p-4 text-xs text-dim">Select a video to see its transcript.</p>
+                        )}
+                    </div>
                 </div>
             )}
         </div>
@@ -385,11 +414,6 @@ function VideoDetails({
                     {fetchError}
                 </p>
             )}
-
-            <div className="mt-1 text-[10px] font-semibold tracking-[0.12em] text-faint uppercase">
-                Transcript
-            </div>
-            <Transcript cues={unifiedCues(v.sessions)} text={v.sessions.map((s) => s.transcript ?? "").filter(Boolean).join(" ")} seekUrl={isYoutubeUrl(v.openUrl) ? v.openUrl : null} />
         </div>
     );
 }

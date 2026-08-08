@@ -4,6 +4,7 @@ import type { Session } from "@/lib/api";
 import { deleteSession, fetchSessionTranscript } from "@/lib/api";
 import { formatDateTime, formatTime } from "@/lib/format";
 import { sessionWatchedSec, fmtDur, playerColor } from "@/lib/timeline";
+import { unifiedCues } from "@/lib/watch-sessions";
 import { cn } from "@/lib/utils";
 
 interface SessionDetailProps {
@@ -12,13 +13,6 @@ interface SessionDetailProps {
     onClose: () => void;
     onJump: (ts: number) => void;
     onMutated: () => void;
-}
-
-interface Cue {
-    t?: number;
-    start_ms?: number;
-    end_ms?: number;
-    text?: string;
 }
 
 export function SessionDetail({ sessions, baseUrl, onClose, onJump, onMutated }: SessionDetailProps) {
@@ -43,13 +37,11 @@ export function SessionDetail({ sessions, baseUrl, onClose, onJump, onMutated }:
         () => sessions.reduce((a, s) => a + (s.transcript?.split(/\s+/).length ?? 0), 0),
         [sessions],
     );
-    const cues = useMemo<Cue[]>(() => {
-        try {
-            return (JSON.parse(main.cues_json ?? "null") as Cue[] | null) ?? [];
-        } catch {
-            return [];
-        }
-    }, [main.cues_json]);
+    const cues = useMemo(() => unifiedCues(sessions), [sessions]);
+    const transcriptText = useMemo(
+        () => sessions.map((s) => s.transcript ?? "").filter(Boolean).join(" "),
+        [sessions],
+    );
 
     const deleteSessionRow = async () => {
         if (deleteBusy) return;
@@ -150,13 +142,9 @@ export function SessionDetail({ sessions, baseUrl, onClose, onJump, onMutated }:
                                 {cues.map((c, i) => (
                                     <div key={i} className="flex gap-2 text-[11px]">
                                         <span className="shrink-0 font-mono text-faint">
-                                            {c.t != null
-                                                ? fmtDur(c.t)
-                                                : c.start_ms != null
-                                                  ? fmtDur(c.start_ms / 1000)
-                                                  : "—"}
+                                            {fmtDur(c.startMs / 1000)}
                                         </span>
-                                        <span className="text-dim">{c.text ?? ""}</span>
+                                        <span className="text-dim">{c.text}</span>
                                     </div>
                                 ))}
                             </div>
@@ -168,7 +156,7 @@ export function SessionDetail({ sessions, baseUrl, onClose, onJump, onMutated }:
                             <h4 className="text-[10px] font-semibold tracking-[1.2px] text-faint uppercase">
                                 Transcript
                             </h4>
-                            {!main.transcript && main.media_id && (
+                            {!transcriptText && main.media_id && (
                                 <button
                                     type="button"
                                     onClick={fetchTranscript}
@@ -182,11 +170,11 @@ export function SessionDetail({ sessions, baseUrl, onClose, onJump, onMutated }:
                         </div>
                         <p
                             className={cn(
-                                "max-h-[150px] overflow-y-auto rounded-md border border-line bg-surface-2 p-3 text-[11px] leading-relaxed text-dim",
-                                !main.transcript && "text-faint",
+                                "overflow-y-auto rounded-md border border-line bg-surface-2 p-3 text-[11px] leading-relaxed text-dim",
+                                !transcriptText && "text-faint",
                             )}
                         >
-                            {main.transcript ?? "No transcript captured."}
+                            {transcriptText || "No transcript captured."}
                         </p>
                         {fetchError && (
                             <p className="mt-1.5 text-[10px] text-danger" data-testid="fetch-transcript-error">

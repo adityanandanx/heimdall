@@ -249,8 +249,19 @@ def test_is_seek():
     assert is_seek(0, 90_000_000, elapsed_s=30) is True        # 90s jumped in 30s
     assert is_seek(120_000_000, 30_000_000, elapsed_s=30) is True  # rewind
     assert is_seek(0, 30_000_000, elapsed_s=30) is False       # normal 1x playback
-    assert is_seek(0, 60_000_000, elapsed_s=30) is True        # 2x is not linear
+    assert is_seek(0, 60_000_000, elapsed_s=30) is False       # 2x playback is linear
+    assert is_seek(0, 45_000_000, elapsed_s=30) is False       # 1.5x playback is linear
     assert is_seek(0, 30_000_000, elapsed_s=30, tolerance_s=45) is False  # loose tolerance
+
+
+def test_is_seek_rate_aware():
+    # At the 30s poll cadence, 2x lands well inside the 2x+slack headroom;
+    # only >2x bursts or rewinds split the range (#66).
+    assert is_seek(60_000_000, 120_000_000, elapsed_s=30) is False  # 2x forever: one range
+    assert is_seek(60_000_000, 150_000_000, elapsed_s=30) is True   # 3x burst: real skip
+    assert is_seek(0, 60_000_000, elapsed_s=60) is False            # 2x over 60s: still fine
+    assert is_seek(0, 180_000_000, elapsed_s=60) is True            # 3x over 60s: seek
+    assert is_seek(120_000_000, 30_000_000, elapsed_s=30) is True   # rewind always splits
 
 
 # ---- player normalization + video time formatting ----

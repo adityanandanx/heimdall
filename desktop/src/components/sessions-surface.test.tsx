@@ -111,15 +111,15 @@ describe("SessionsSurface", () => {
             name: "Omurice — Uncle Roger — view details",
         });
         fireEvent.click(card);
-        const pane = details();
+        const pane = within(screen.getByTestId("transcript-pane"));
 
-        expect(within(pane).getByText("the most difficult omelet")).toBeInTheDocument();
-        expect(within(pane).getByText("fuiyoh")).toBeInTheDocument();
-        expect(within(pane).getByText("fuiyoh so good")).toBeInTheDocument();
-        expect(within(pane).getByText("2:00")).toBeInTheDocument();
-        expect(within(pane).getByText("15:00")).toBeInTheDocument();
+        expect(pane.getByText("the most difficult omelet")).toBeInTheDocument();
+        expect(pane.getByText("fuiyoh")).toBeInTheDocument();
+        expect(pane.getByText("fuiyoh so good")).toBeInTheDocument();
+        expect(pane.getByText("2:00")).toBeInTheDocument();
+        expect(pane.getByText("15:00")).toBeInTheDocument();
 
-        fireEvent.click(within(pane).getByRole("button", { name: /open the most difficult omelet/ }));
+        fireEvent.click(pane.getByRole("button", { name: /open the most difficult omelet/ }));
         expect(open).toHaveBeenCalledWith(
             "https://www.youtube.com/watch?v=omurice123&t=120s",
             "_blank",
@@ -134,7 +134,9 @@ describe("SessionsSurface", () => {
             name: "local film.mkv — view details",
         });
         fireEvent.click(card);
-        expect(within(details()).getByText("No transcript captured.")).toBeInTheDocument();
+        expect(
+            within(screen.getByTestId("transcript-pane")).getByText("No transcript captured."),
+        ).toBeInTheDocument();
     });
 
     it("fetches a missing transcript for a stream-backed session (#1)", async () => {

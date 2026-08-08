@@ -280,13 +280,18 @@ class SessionTracker:
         return closed
 
 
-def is_seek(old_us: int, new_us: int, elapsed_s: float, tolerance_s: float = 30.0) -> bool:
-    """True when the position moved more than linear 1x playback explains.
+def is_seek(old_us: int, new_us: int, elapsed_s: float, tolerance_s: float = 30.0,
+            max_rate: float = 2.0) -> bool:
+    """True when the position moved beyond up-to-2x playback explains (#66).
 
-    Normal playback advances `elapsed_s` video-seconds; anything beyond that
-    plus the tolerance is a jump (seek, rewind, 2x+).
+    Playback at 1x/1.5x/2x accelerates the position without detaching it from
+    the wall clock; anything past `elapsed_s * max_rate` plus the poll-noise
+    tolerance is a jump (seek, rewind, player-resync), and backwards movement
+    of any real size is always a seek. Without the rate headroom every 30s
+    poll at 2x looks like a seek and the watch range fragments into gaps.
     """
-    return abs(new_us - old_us) >= (elapsed_s + tolerance_s) * 1_000_000
+    limit = (elapsed_s * max_rate + tolerance_s) * 1_000_000
+    return new_us - old_us >= limit or old_us - new_us >= limit
 
 
 def normalize_player(player: str) -> str:
