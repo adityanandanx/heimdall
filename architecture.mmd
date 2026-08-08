@@ -1,73 +1,108 @@
 ---
-title: Heimdall v1 — local screen memory on Hyprland
+title: Heimdall v2 — local screen memory on Hyprland
 ---
+%%{init: {"theme": "base", "themeVariables": {
+    "fontFamily": "system-ui, sans-serif",
+    "fontSize": "13px",
+    "background": "#0c0f14",
+    "primaryColor": "#131926",
+    "primaryTextColor": "#e9edf5",
+    "secondaryColor": "#131926",
+    "secondaryTextColor": "#e9edf5",
+    "tertiaryColor": "#131926",
+    "lineColor": "#5e6a82",
+    "textColor": "#e9edf5",
+    "nodeTextColor": "#e9edf5",
+    "labelTextColor": "#e9edf5",
+    "edgeLabelBackground": "#131926",
+    "clusterLabelColor": "#e9edf5",
+    "clusterBkg": "#0c0f14",
+    "clusterBorder": "#222c40"
+}}}%%
 flowchart TB
     subgraph HYPR["🪟 Hyprland (Wayland)"]
         direction LR
         IPC["socket2 events<br/>activewindow · workspace · openwindow<br/>fullscreen · windowtitle"]
         WINMETA["hyprctl activewindow<br/>class · title · geometry"]
-        MPRIS["MPRIS (playerctl)<br/>track change · play/pause"]
+        MPRIS["MPRIS (playerctl)<br/>track change · play/pause · players"]
     end
 
     subgraph CAP["📡 Capture daemon — Python (event-driven)"]
         direction LR
         TRIG["Event Trigger<br/>debounce 1.5s · keepalive 5min<br/>screencast excluded"]
         SHOT["grim -g active-window region<br/>JPEG q80 · ~280KB"]
-        OCR["tesseract OCR (worker queue)<br/>ENG · ~4.3s/frame"]
+        PHASH["phash change gate<br/>skip near-duplicates"]
+        A11Y["a11y tree (AT-SPI) — winner<br/>flat text · JSON structure"]
+        OCR["OCR fallback<br/>RapidOCR · NPU engine (OpenVINO)"]
+        EXT["Chromium / Electron<br/>MV3 native-messaging extension<br/>per-tab media stream"]
+        SESS["watch-session state machine<br/>MPRIS polling · CDP resolution"]
+        TXT["transcripts<br/>yt-dlp captions · lazy ASR<br/>ffmpeg + faster-whisper"]
     end
 
     subgraph DB["💾 SQLite + FTS5 — ~/.heimdall/"]
         direction LR
-        FRAMES["frames table<br/>ts · class · title · path · ocr"]
-        TRACKS["tracks table<br/>MPRIS play/pause spans"]
-        EVENTS["events table<br/>raw socket2 log"]
-        FTS["frames_fts<br/>FTS5 external content<br/>ocr + title + class"]
+        FRAMES["frames<br/>ts · class · title · monitor/ws<br/>a11y_text · a11y_json · ocr_text"]
+        TRACKS["tracks<br/>MPRIS play/pause spans"]
+        WSESS["watch_sessions<br/>ranges JSON · cues · transcript_source"]
+        MSTREAM["media_stream<br/>tab href · title · current_time"]
+        EVENTS["events<br/>raw socket2 log"]
+        FTS["frames_fts + watch_sessions_fts<br/>FTS5 external content<br/>a11y/ocr + title + transcript"]
     end
 
-    subgraph API["🔌 FastAPI — 127.0.0.1:3030"]
+    subgraph API["🔌 FastAPI — 127.0.0.1:3030 (loopback)"]
         direction LR
-        SEARCH["/search?q=&window_class=…"]
-        FRAMES_EP["/frames · /frames/{id}/image"]
-        HEALTH["/health"]
+        SEARCH["/search merged · /search/facets<br/>filters: apps · players · ws/monitor · source"]
+        FRAMES_EP["/frames · /frames/{id}/image<br/>/sessions"]
+        SETTINGS["settings — live spine<br/>engine toggle · pause · forget"]
+        HEAL["/health"]
         PIPES_EP["POST /pipes/run/{name}"]
-        SCHED["APScheduler<br/>recap 23:00 · breakdown 23:05"]
+        SCHED["APScheduler<br/>day recap 23:00 · breakdown 23:05"]
     end
 
     subgraph PIPES["🧩 Pipes — plain functions"]
         direction LR
-        RECAP["day recap<br/>load → prompt → completion<br/>→ parse → render → write"]
-        BREAK["time breakdown<br/>hybrid rules+LLM · spans"]
+        RECAP["day recap<br/>load → prompt → completion → render"]
+        BREAK["time breakdown — hybrid rules+LLM<br/>merged over N days"]
     end
 
-    subgraph LLM["🧠 llama-server :8080"]
+    subgraph LLM["🧠 llama-server :8080 — Gemma 4 E2B QAT Q4_0"]
         direction LR
-        GEMMA["Gemma 4 E2B QAT Q4_0<br/>Vulkan-only · temp 0 · --reasoning off"]
-        OPENAI["OpenAI-compatible<br/>/v1/chat/completions<br/>response_format json_object"]
+        GEMMA["Vulkan-only · temp 0<br/>OpenAI-compatible /v1/chat<br/>json_object"]
     end
 
     subgraph OBS["👁 Langfuse (self-hosted, optional)"]
         direction LR
-        TRACE["@observe pipe runs<br/>completions · parse errors"]
+        TRACE["pipe runs only<br/>completions · parse errors"]
     end
 
-    subgraph CLIENT["🧑‍💻 CLI — thin HTTP client"]
+    subgraph CLIENT["🧑💻 CLI + desktop"]
         direction LR
-        CLI["heimdall search · recap · breakdown<br/>status · run · serve"]
+        CLI["heimdall search · recap · breakdown<br/>status · capture · run · serve"]
+        TUI["Tauri 2 client (day-browser style)<br/>Day / Search / Sessions / Status / Settings"]
     end
 
     IPC --> TRIG
     MPRIS --> TRIG
+    MPRIS --> SESS
     WINMETA --> SHOT
     TRIG --> SHOT
-    SHOT --> OCR
-    SHOT --> FRAMES
-    OCR --> FTS
+    SHOT --> PHASH
+    PHASH --> A11Y
+    PHASH --> OCR
+    EXT --> MSTREAM
+    A11Y --> FRAMES
+    OCR --> FRAMES
+    MSTREAM --> SESS
+    SESS --> WSESS
+    TXT --> WSESS
     TRIG --> EVENTS
     MPRIS --> TRACKS
 
-    FTS --> SEARCH
-    FRAMES --> FRAMES_EP
+    FRAMES --> FTS
+    WSESS --> FTS
 
+    FTS --> SEARCH
+    FTS --> FRAMES_EP
     SEARCH --> API
     FRAMES_EP --> API
 
@@ -77,14 +112,11 @@ flowchart TB
     SCHED --> BREAK
     RECAP --> LLM
     BREAK --> LLM
-    GEMMA --> OPENAI
-    OPENAI --> RECAP
-    OPENAI --> BREAK
-
     RECAP -. trace .-> TRACE
     BREAK -. trace .-> TRACE
 
     CLI --> API
+    TUI --> API
     API -. serve .-> SCHED
 
     classDef hypr fill:#0f172a,stroke:#94a3b8,color:#e2e8f0
@@ -97,10 +129,10 @@ flowchart TB
     classDef client fill:#1e3a8a,stroke:#60a5fa,color:#dbeafe
     class HYPR hypr
     class IPC,WINMETA,MPRIS hypr
-    class TRIG,SHOT,OCR cap
-    class FRAMES,TRACKS,EVENTS,FTS db
-    class SEARCH,FRAMES_EP,HEALTH,PIPES_EP,SCHED api
+    class TRIG,SHOT,PHASH,A11Y,OCR,EXT,SESS,TXT cap
+    class FRAMES,TRACKS,WSESS,MSTREAM,EVENTS,FTS db
+    class SEARCH,FRAMES_EP,SETTINGS,HEAL,PIPES_EP,SCHED api
     class RECAP,BREAK pipes
-    class GEMMA,OPENAI llm
+    class GEMMA llm
     class TRACE obs
-    class CLI client
+    class CLI,TUI client

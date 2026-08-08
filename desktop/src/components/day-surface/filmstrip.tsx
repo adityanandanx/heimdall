@@ -306,13 +306,15 @@ export function Filmstrip({ baseUrl, frames, sessions, selected, onSelect, onMed
                                             sel && "scale-[1.7]",
                                             hit && "ring-ok",
                                             sel && !hit && "ring-background/90",
+                                            f.text_pending && "animate-pulse",
                                             muted && "opacity-25",
                                         )}
                                         style={{
                                             left: axisOf(axis, f.ts),
                                             top: "50%",
-                                            background: clsColor(f.window_class),
+                                            background: f.text_pending ? "var(--text-faint)" : clsColor(f.window_class),
                                         }}
+                                        title={f.text_pending ? `${f.window_title} (extracting…)` : f.window_title ?? undefined}
                                     />
                                 );
                             })}

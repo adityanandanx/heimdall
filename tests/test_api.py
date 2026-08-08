@@ -982,6 +982,25 @@ def test_url_for_window_matches_tab_title_and_stripe_suffix(db):
     assert db.url_for_window("heimdall repo", 1_700_000_000_500) == "https://github.com/heimdall"
     assert db.url_for_window("Uncle Roger", 1_700_000_010_500) == "https://youtube.com/watch?v=x"
     assert db.url_for_window("Uncle Roger", 1_800_000_000_000) is None  # stale tab
+    # Chrome window titles stack decorations: " - Google Chrome" after the
+    # tab's own " - YouTube"; the normalized match must still resolve.
+    assert db.url_for_window(
+        "Uncle Roger - YouTube - Google Chrome", 1_700_000_011_000
+    ) == "https://youtube.com/watch?v=x"
+
+
+def test_text_pending_lifecycle(db):
+    """Frames queued for extraction report text_pending=1 until the worker
+    writes back (even when nothing readable was found)."""
+    fid = db.insert_frame({
+        "ts": 1_700_000_000_000, "monitor": 0, "workspace": 2,
+        "window_class": "firefox", "window_title": "page",
+        "fullscreen": 0, "trigger": "activewindow", "image_path": "frames/x.jpg",
+        "image_bytes": 10, "ocr_text": None, "ocr_sec": None, "text_pending": True,
+    })
+    assert db.get_frame(fid)["text_pending"] == 1
+    db.set_frame_extraction(fid, a11y_text=None, a11y_json=None)
+    assert db.get_frame(fid)["text_pending"] == 0
 
 
 def test_delete_frame_row_and_image_via_db(db):
@@ -1068,6 +1087,15 @@ def test_source_url_backfill_attaches_historic_tab_url(db):
         current_time_us=0,
         ts=code_ts - 360_000,
     )
+    # a Chrome-window frame title stacks suffixes (" - YouTube - Google
+    # Chrome"); the normalized strip must resolve it to the stream row.
+    chrome_id = db.insert_frame({
+        "ts": yt_ts + 1_000, "monitor": 0, "workspace": 2,
+        "window_class": "chrome", "window_title": "youtube.com/watch?v=dQw4w9WgXcQ - YouTube - Google Chrome",
+        "fullscreen": 0, "trigger": "activewindow", "image_path": "frames/y.jpg",
+        "image_bytes": 10,
+    })
     init_db(db.path)  # second startup backfills the NULLs
     assert db.get_frame(yt_id)["source_url"] == "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+    assert db.get_frame(chrome_id)["source_url"] == "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
     assert db.get_frame(code_id)["source_url"] is None

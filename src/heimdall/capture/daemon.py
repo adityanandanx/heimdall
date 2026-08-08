@@ -619,16 +619,16 @@ class CaptureDaemon:
                 log.warning("grim capture failed")
                 self._manual_ack(status="error", detail="grim capture failed")
                 continue
-            frame_id = self._store_frame(ts, meta, trigger, img)
+            window_class = meta.get("class") or ""
+            extract = self._should_extract(trigger, window_class, img)
+            frame_id = self._store_frame(ts, meta, trigger, img, text_pending=extract)
             if frame_id is None:
                 self._manual_ack(status="error", detail="frame not stored")
                 continue
             if manual:
                 self._manual_ack(status="ok", frame_id=frame_id)
-            if self._should_extract(trigger, meta.get("class") or "", img):
-                self.extract_jobs.put(
-                    (frame_id, meta.get("class") or "", meta.get("title") or "", img)
-                )
+            if extract:
+                self.extract_jobs.put((frame_id, window_class, meta.get("title") or "", img))
 
     def _should_extract(self, trigger: str, window_class: str, img: bytes) -> bool:
         """Per-window change gate (#34): a keepalive capture whose pixels are
@@ -644,7 +644,8 @@ class CaptureDaemon:
         self._last_phash[window_class] = h
         return True
 
-    def _store_frame(self, ts: int, meta: dict, trigger: str, img: bytes) -> Optional[int]:
+    def _store_frame(self, ts: int, meta: dict, trigger: str, img: bytes,
+                     text_pending: bool = False) -> Optional[int]:
         dt = time.localtime(ts / 1000)
         rel_dir = f"frames/{dt.tm_year:04d}/{dt.tm_mon:02d}/{dt.tm_mday:02d}"
         day_dir = self.data / rel_dir
@@ -664,6 +665,7 @@ class CaptureDaemon:
             "image_bytes": len(img),
             "ocr_text": None,
             "ocr_sec": None,
+            "text_pending": text_pending,
         })
 
     def _frame_source_url(self, window_title: Optional[str], ts: int) -> Optional[str]:

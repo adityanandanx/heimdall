@@ -81,6 +81,7 @@ export interface Frame {
     ocr_engine: string | null;
     a11y_text: string | null;
     a11y_json: string | null;
+    text_pending: number;
 }
 
 export interface Session {

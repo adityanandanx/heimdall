@@ -112,7 +112,7 @@ export const frameFixtures = [
     { id: 5, ts: at(10, 0), window_class: "browser", window_title: "YouTube — omurice", workspace: "3:3", ocr_text: "video", a11y_text: null },
     { id: 6, ts: at(10, 30), window_class: "browser", window_title: "YouTube — omurice", workspace: "3:3", ocr_text: "video", a11y_text: null },
     { id: 7, ts: at(11, 0), window_class: "browser", window_title: "YouTube — omurice", workspace: "3:3", ocr_text: "video", a11y_text: null },
-    { id: 8, ts: at(11, 30), window_class: "code.editor", window_title: "routers.py", workspace: "3:3", ocr_text: "search endpoint", a11y_text: null },
+    { id: 8, ts: at(11, 30), window_class: "code.editor", window_title: "routers.py", workspace: "3:3", ocr_text: null, a11y_text: null },
     { id: 9, ts: at(12, 0), window_class: "terminal", window_title: "~/.local/bin", workspace: "2:1", ocr_text: "git push", a11y_text: null },
     { id: 10, ts: at(12, 30), window_class: "code.editor", window_title: "watch-lane.tsx", workspace: "3:3", ocr_text: "watched ranges", a11y_text: null },
 ].map((f) => ({
@@ -132,6 +132,7 @@ export const frameFixtures = [
     ocr_engine: "easyocr",
     a11y_text: f.a11y_text,
     a11y_json: null,
+    text_pending: f.id === 8 ? 1 : 0,
 }));
 
 export const sessionFixtures = [

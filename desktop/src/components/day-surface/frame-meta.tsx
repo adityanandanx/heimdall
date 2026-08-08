@@ -68,6 +68,11 @@ export function FrameMeta({ frame, recapResult, onRunRecap, recapRunning, apps, 
                     mono
                 />
                 <Row
+                    k="status"
+                    v={frame.text_pending ? "extracting…" : "done"}
+                    mono
+                />
+                <Row
                     k="ocr_sec"
                     v={
                         frame.ocr_sec != null
@@ -187,14 +192,17 @@ export function SourceBadge({ src }: { src: "a11y" | "ocr" | "none" }) {
 
 function OcrBox({ frame, text }: { frame: Frame; text: string }) {
     const [copied, setCopied] = useState(false);
-    const status = !text
-        ? frame.ocr_sec != null
-            ? `OCR ran ${frame.ocr_sec.toFixed(1)}s (${frame.ocr_engine ?? "engine"}) — read nothing`
-            : "a11y tree was empty · OCR not invoked"
-        : null;
+    const pending = frame.text_pending;
+    const status = pending
+        ? "extraction queued — text will appear when OCR / a11y finishes"
+        : !text
+          ? frame.ocr_sec != null
+              ? `OCR ran ${frame.ocr_sec.toFixed(1)}s (${frame.ocr_engine ?? "engine"}) — read nothing`
+              : "a11y tree was empty · OCR not invoked"
+          : null;
     return (
         <div className="relative rounded-md border border-line bg-surface-2 p-3 text-xs text-dim">
-            {text || "No text captured for this frame."}
+            {text || (pending ? "Extracting text…" : "No text captured for this frame.")}
             {status && (
                 <div className="mt-1.5 border-t border-line pt-1.5 text-[10px] text-faint">
                     {status}

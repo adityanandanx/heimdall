@@ -90,7 +90,8 @@ CREATE TABLE IF NOT EXISTS frames (
     ocr_sec REAL,
     a11y_text TEXT,                   -- flattened tree text; the winner when set
     a11y_json TEXT,                   -- role/name/state structure, retained for retrieval
-    ocr_engine TEXT                   -- 'rapid' when the OCR path was used (v2 #34)
+    ocr_engine TEXT,                  -- 'rapid' when the OCR path was used (v2 #34)
+    text_pending INTEGER NOT NULL DEFAULT 0  -- 1 while extraction is queued/in-flight
 );
 
 CREATE TABLE IF NOT EXISTS tracks (
@@ -143,7 +144,7 @@ CREATE TABLE IF NOT EXISTS media_stream (
 FRAME_COLS = (
     "id", "ts", "monitor", "workspace", "window_class", "window_title",
     "fullscreen", "trigger", "source_url", "image_path", "image_bytes", "ocr_text", "ocr_sec",
-    "a11y_text", "a11y_json", "ocr_engine",
+    "a11y_text", "a11y_json", "ocr_engine", "text_pending",
 )
 
 SEARCH_COLS = ("id", "ts", "window_class", "window_title", "workspace", "image_path", "snippet", "score")
@@ -182,8 +183,8 @@ def _backfill_source_urls(conn: sqlite3.Connection) -> None:
 
     Frames captured before the frames_v2 rebuild never got a source_url; the
     extension's media_stream rows already exist, so during startup we attach
-    the latest matching tab URL (same title ± " - YouTube" suffix) that was
-    live within 5 minutes of the capture. Idempotent via the NULL guard.
+    the latest matching tab URL within 5 minutes of the capture. Idempotent
+    via the NULL guard and the same suffix normalization used for live frames.
     """
     has_null = conn.execute(
         "SELECT 1 FROM frames f WHERE f.source_url IS NULL AND f.window_title IS NOT NULL"
@@ -192,20 +193,17 @@ def _backfill_source_urls(conn: sqlite3.Connection) -> None:
     has_stream = conn.execute("SELECT 1 FROM media_stream LIMIT 1").fetchone()
     if not (has_null and has_stream):
         return
+    strip = _TITLE_SUFFIX_STRIP
     conn.execute(
         """
         UPDATE frames SET source_url = (
             SELECT m.href FROM media_stream m
             WHERE m.ts >= frames.ts - 300000 AND m.ts <= frames.ts + 300000
-              AND (
-                  m.tab_title = frames.window_title
-               OR m.tab_title = frames.window_title || ' - YouTube'
-               OR m.tab_title = frames.window_title || ' - YouTube Music'
-              )
+              AND %s = %s
             ORDER BY m.ts DESC LIMIT 1
         )
         WHERE source_url IS NULL AND window_title IS NOT NULL AND window_title != ''
-        """
+        """ % (strip.format(c="m.tab_title"), strip.format(c="frames.window_title")),
     )
 
 
@@ -220,9 +218,10 @@ def _migrate_v2(conn: sqlite3.Connection) -> None:
     relaxed (table rebuild) when it still carries the NOT NULL constraint.
     """
     info = {r[1]: r for r in conn.execute("PRAGMA table_info(frames)")}
-    for col in ("a11y_text", "a11y_json", "ocr_engine", "source_url"):
+    for col, ddl in (("a11y_text", "TEXT"), ("a11y_json", "TEXT"), ("ocr_engine", "TEXT"),
+                     ("source_url", "TEXT"), ("text_pending", "INTEGER NOT NULL DEFAULT 0")):
         if col not in info:
-            conn.execute(f"ALTER TABLE frames ADD COLUMN {col} TEXT")
+            conn.execute(f"ALTER TABLE frames ADD COLUMN {col} {ddl}")
     ws_cols = {r[1] for r in conn.execute("PRAGMA table_info(watch_sessions)")}
     if "live" not in ws_cols:
         conn.execute("ALTER TABLE watch_sessions ADD COLUMN live INTEGER NOT NULL DEFAULT 0")
@@ -286,14 +285,16 @@ def _rebuild_frames_table(conn: sqlite3.Connection) -> None:
             ocr_sec REAL,
             a11y_text TEXT,
             a11y_json TEXT,
-            ocr_engine TEXT
+            ocr_engine TEXT,
+            text_pending INTEGER NOT NULL DEFAULT 0
         );
         INSERT INTO frames_v2 (id, ts, monitor, workspace, window_class,
             window_title, fullscreen, trigger, source_url, image_path, image_bytes,
-            ocr_text, ocr_sec, a11y_text, a11y_json, ocr_engine)
+            ocr_text, ocr_sec, a11y_text, a11y_json, ocr_engine, text_pending)
         SELECT id, ts, monitor, workspace, window_class, window_title,
             fullscreen, trigger, source_url, image_path, image_bytes,
-            ocr_text, ocr_sec, a11y_text, a11y_json, ocr_engine FROM frames;
+            ocr_text, ocr_sec, a11y_text, a11y_json, ocr_engine, COALESCE(text_pending, 0)
+            FROM frames;
         DROP TABLE frames;
         ALTER TABLE frames_v2 RENAME TO frames;
         CREATE INDEX IF NOT EXISTS idx_frames_ts ON frames(ts);
@@ -301,6 +302,29 @@ def _rebuild_frames_table(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_frames_trigger ON frames(trigger);
         """
     )
+
+
+#: Browser/OS tab-title decorations stripped before matching a frame's window
+#: title against the extension stream (#64): YouTube tabs append " - YouTube",
+#: the browser window adds " - Google Chrome", chrome tabs so on.
+TITLE_SUFFIXES = (" - YouTube", " - YouTube Music", " - Google Chrome")
+
+
+def _strip_title_suffixes(title: str) -> str:
+    """Trim trailing title decorations, repeatedly and in any order
+    ("Video - YouTube - Google Chrome" -> "Video")."""
+    changed = True
+    while changed:
+        changed = False
+        for suffix in TITLE_SUFFIXES:
+            if title.endswith(suffix):
+                title = title[: -len(suffix)]
+                changed = True
+    return title.strip()
+
+
+#: The same normalization expressed for SQL (backfill over historical rows).
+_TITLE_SUFFIX_STRIP = "REPLACE(REPLACE(REPLACE({c}, ' - Google Chrome', ''), ' - YouTube Music', ''), ' - YouTube', '')"
 
 
 class Database:
@@ -341,17 +365,18 @@ class Database:
             cur = conn.execute(
                 "INSERT INTO frames (ts, monitor, workspace, window_class, window_title,"
                 " fullscreen, trigger, source_url, image_path, image_bytes, ocr_text, ocr_sec,"
-                " a11y_text, a11y_json, ocr_engine)"
+                " a11y_text, a11y_json, ocr_engine, text_pending)"
                 " VALUES (:ts, :monitor, :workspace, :window_class, :window_title,"
                 " :fullscreen, :trigger, :source_url, :image_path, :image_bytes, :ocr_text, :ocr_sec,"
-                " :a11y_text, :a11y_json, :ocr_engine)",
+                " :a11y_text, :a11y_json, :ocr_engine, :text_pending)",
                 {**values,
                  "source_url": values.get("source_url"),
                  "ocr_text": values.get("ocr_text"),
                  "ocr_sec": values.get("ocr_sec"),
                  "a11y_text": values.get("a11y_text"),
                  "a11y_json": values.get("a11y_json"),
-                 "ocr_engine": values.get("ocr_engine")},
+                 "ocr_engine": values.get("ocr_engine"),
+                 "text_pending": 1 if values.get("text_pending") else 0},
             )
             conn.commit()
             return cur.lastrowid
@@ -369,10 +394,12 @@ class Database:
         unknown = set(updates) - set(allowed)
         if unknown:
             raise ValueError(f"unknown extraction column(s): {sorted(unknown)}")
+        # Extraction completed for this frame — clear the pending flag so the
+        # UI stops showing "extracting…" even when nothing readable was found.
         sets = ", ".join(f"{col} = ?" for col in updates)
         with self._lock, self.conn() as conn:
             conn.execute(
-                f"UPDATE frames SET {sets} WHERE id = ?",
+                f"UPDATE frames SET {sets}, text_pending = 0 WHERE id = ?",
                 (*updates.values(), frame_id),
             )
             conn.commit()
@@ -592,23 +619,22 @@ class Database:
         """
         if not window_title:
             return None
-        suffixes = (" - YouTube", " - YouTube Music")
-        variants = {window_title}
-        for suffix in suffixes:
-            if window_title.endswith(suffix):
-                variants.add(window_title[: -len(suffix)])
-        for candidate in variants:
-            stored = [candidate]
-            for suffix in suffixes:
-                stored.append(candidate + suffix)
-            self.query_count += 1
-            with self._lock, self.conn() as conn:
-                row = conn.execute(
-                    "SELECT href FROM media_stream"
-                    f" WHERE tab_title IN ({', '.join('?' * len(stored))}) AND ts >= ?"
-                    " ORDER BY ts DESC LIMIT 1",
-                    (*stored, ts - max_age_ms),
-                ).fetchone()
+        # Normalize both sides by stripping known trailing decorations in any
+        # order — Chrome appends " - Google Chrome" after the tab title, and
+        # YouTube tabs carry " - YouTube" / " - YouTube Music".
+        base = _strip_title_suffixes(window_title)
+        if not base:
+            return None
+        stored = [base]
+        stored += [base + s for s in TITLE_SUFFIXES]
+        self.query_count += 1
+        with self._lock, self.conn() as conn:
+            row = conn.execute(
+                "SELECT href FROM media_stream"
+                f" WHERE tab_title IN ({', '.join('?' * len(stored))}) AND ts >= ?"
+                " ORDER BY ts DESC LIMIT 1",
+                (*stored, ts - max_age_ms),
+            ).fetchone()
             if row:
                 return row[0]
         return None

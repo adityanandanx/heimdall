@@ -28,6 +28,21 @@ describe("DaySurface #1 request", () => {
         resetFixtures();
     });
 
+    it("marks a frame as extracting… until its text extraction completes (#1)", async () => {
+        renderDay();
+        await screen.findByText("⟳ synthesize");
+        // Walk from the default (frame 10) back two frames to frame 8, the
+        // fixture frame that is still queued for text extraction.
+        fireEvent.keyDown(window, { key: "ArrowLeft" });
+        fireEvent.keyDown(window, { key: "ArrowLeft" });
+        expect(await screen.findByText("extracting…")).toBeInTheDocument();
+        expect(
+            screen.getByText(/extraction queued — text will appear/),
+        ).toBeInTheDocument();
+        // Pending is a live per-frame state: no OCR text to copy yet.
+        expect(screen.getByText("Extracting text…")).toBeInTheDocument();
+    });
+
     it("shows the selected frame's exact time above the playhead and follows selection", async () => {
         renderDay();
         await screen.findByText("⟳ synthesize");
