@@ -124,7 +124,9 @@ export function groupSessionsBySource(sessions: Session[]): SourceGroup[] {
         v.rangesUs = mergeRangesUs(v.rangesUs);
         if (v.lengthUs > 0) {
             const covered = v.rangesUs.reduce((a, [x, y]) => a + (y - x), 0);
-            v.coveragePct = Math.round((covered / v.lengthUs) * 100);
+            // #1: backend sanitization clamps ranges to length, but clamp here
+            // too so badges can never show >100% even for legacy/corrupt data.
+            v.coveragePct = Math.min(100, Math.round((covered / v.lengthUs) * 100));
         }
         v.sessions.sort((a, b) => tsMs(a.ts_start) - tsMs(b.ts_start));
     }

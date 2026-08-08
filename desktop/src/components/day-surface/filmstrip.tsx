@@ -364,12 +364,21 @@ export function Filmstrip({ baseUrl, frames, sessions, selected, onSelect, onMed
                         })}
 
                         {selected && axis.length > 0 && (
-                            <div
-                                className="pointer-events-none absolute top-[-4px] bottom-[-4px] z-10 w-0.5 bg-primary"
-                                style={{ left: axisOf(axis, selected.ts) }}
-                            >
-                                <div className="absolute top-[-3px] left-1/2 h-0 w-0 -translate-x-1/2 border-x-[5px] border-t-[6px] border-x-transparent border-t-primary" />
-                            </div>
+                            <>
+                                <div
+                                    className="pointer-events-none absolute top-[-4px] bottom-[-4px] z-10 w-0.5 bg-primary"
+                                    style={{ left: axisOf(axis, selected.ts) }}
+                                >
+                                    <div className="absolute top-[-3px] left-1/2 h-0 w-0 -translate-x-1/2 border-x-[5px] border-t-[6px] border-x-transparent border-t-primary" />
+                                </div>
+                                <div
+                                    data-testid="playhead-time"
+                                    className="pointer-events-none absolute top-1 z-20 -translate-x-1/2 rounded-sm border border-primary/50 bg-background/95 px-1 font-mono text-[10px] leading-4 whitespace-nowrap text-primary shadow-[var(--e1)]"
+                                    style={{ left: axisOf(axis, selected.ts) }}
+                                >
+                                    {formatTimeS(selected.ts)}
+                                </div>
+                            </>
                         )}
                     </div>
                 </div>
@@ -407,6 +416,11 @@ function HoverPopup({ hov, baseUrl }: { hov: HoverState; baseUrl: string }) {
                 <span className="truncate text-[10px] text-dim">{hov.f.window_class}</span>
                 {hov.f.window_title && (
                     <span className="truncate text-[10px] text-faint">{hov.f.window_title}</span>
+                )}
+                {hov.f.source_url && (
+                    <span className="truncate font-mono text-[9px] text-faint/80">
+                        {hov.f.source_url}
+                    </span>
                 )}
             </div>
         </div>

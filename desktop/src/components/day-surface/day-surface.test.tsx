@@ -1,7 +1,7 @@
 import { fireEvent, screen, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { DaySurface } from "./day-surface";
-import { base, fixtureDay } from "@/test/msw/handlers";
+import { base, fixtureDay, resetFixtures } from "@/test/msw/handlers";
 import { shiftDay } from "@/lib/timeline";
 import { renderWithQuery } from "@/test/render";
 
@@ -21,6 +21,87 @@ function renderDay(overrides: { day?: string } = {}) {
     );
     return { onDayChange, onOpenSearch, onSeekDone };
 }
+
+describe("DaySurface #1 request", () => {
+    afterEach(() => {
+        vi.restoreAllMocks();
+        resetFixtures();
+    });
+
+    it("shows the selected frame's exact time above the playhead and follows selection", async () => {
+        renderDay();
+        await screen.findByText("⟳ synthesize");
+        // Default selection: last frame (12:30:00).
+        expect(screen.getByTestId("playhead-time")).toHaveTextContent("12:30:00");
+        fireEvent.keyDown(window, { key: "ArrowLeft" });
+        await waitFor(() =>
+            expect(screen.getByTestId("playhead-time")).toHaveTextContent("12:00:00"),
+        );
+    });
+
+    it("shows the frame's tab source URL in the sidebar and caption overlay (#1)", async () => {
+        renderDay();
+        await screen.findByText("⟳ synthesize");
+        fireEvent.keyDown(window, { key: "ArrowLeft" });
+        fireEvent.keyDown(window, { key: "ArrowLeft" });
+        fireEvent.keyDown(window, { key: "ArrowLeft" });
+        fireEvent.keyDown(window, { key: "ArrowLeft" });
+        fireEvent.keyDown(window, { key: "ArrowLeft" }); // frame 5, YouTube tab
+        const url = "https://www.youtube.com/watch?v=omurice-630";
+        const link = await screen.findByTestId("frame-source-url");
+        expect(link).toHaveTextContent(url);
+        expect(link).toHaveAttribute("href", url);
+        // same URL on the bottom caption overlay
+        expect(screen.getAllByText(url).length).toBe(2);
+    });
+
+    it("deletes the selected frame after confirm and reselects the newest remaining (#1)", async () => {
+        renderDay();
+        await screen.findAllByText(/watch-lane\.tsx/); // frame 10 selected by default
+        const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+        fireEvent.click(screen.getByTestId("delete-frame"));
+        await waitFor(() =>
+            expect(screen.queryByText(/watch-lane\.tsx/)).not.toBeInTheDocument(),
+        );
+        expect(confirm).toHaveBeenCalledTimes(1);
+        // Selection fell back to the new last frame (12:00 git push terminal).
+        await screen.findAllByText(/git push/);
+    });
+
+    it("keeps the frame when delete is cancelled (#1)", async () => {
+        renderDay();
+        await screen.findAllByText(/watch-lane\.tsx/);
+        vi.spyOn(window, "confirm").mockReturnValue(false);
+        fireEvent.click(screen.getByTestId("delete-frame"));
+        await screen.findAllByText(/watch-lane\.tsx/);
+        expect(screen.queryByTestId("frame-source-url")).not.toBeInTheDocument();
+    });
+
+    it("deletes a session from its detail popup (#1)", async () => {
+        renderDay();
+        await screen.findAllByText(/watch-lane\.tsx/);
+        fireEvent.click(screen.getByRole("button", { name: /Some dev video/ }));
+        await screen.findByRole("dialog", { name: /session details/i });
+        vi.spyOn(window, "confirm").mockReturnValue(true);
+        fireEvent.click(screen.getByTestId("delete-session"));
+        await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+        // Refetched list no longer has the deleted session's lane.
+        await waitFor(() =>
+            expect(screen.queryByRole("button", { name: /Some dev video/ })).not.toBeInTheDocument(),
+        );
+    });
+
+    it("manually fetches a missing transcript from the detail dialog (#1)", async () => {
+        renderDay();
+        await screen.findAllByText(/watch-lane\.tsx/);
+        fireEvent.click(screen.getByRole("button", { name: /Some dev video/ }));
+        const dialog = await screen.findByRole("dialog", { name: /session details/i });
+        expect(dialog).toHaveTextContent("No transcript captured.");
+        fireEvent.click(screen.getByTestId("fetch-transcript"));
+        expect(await screen.findByText("Freshly fetched captions for testing.")).toBeInTheDocument();
+        expect(screen.queryByTestId("fetch-transcript")).not.toBeInTheDocument();
+    });
+});
 
 describe("DaySurface", () => {
     it("renders the day's frames with a default selection and caption", async () => {

@@ -124,6 +124,7 @@ export const frameFixtures = [
     window_title: f.window_title,
     fullscreen: 0,
     trigger: "interval",
+    source_url: f.id === 5 || f.id === 6 || f.id === 7 ? "https://www.youtube.com/watch?v=omurice-630" : null,
     image_path: `/tmp/heimdall/frames/${f.id}.png`,
     image_bytes: 8642,
     ocr_text: f.ocr_text,
@@ -208,6 +209,16 @@ export const sessionFixtures = [
         transcript_source: null,
     },
 ];
+
+// DELETE/mutating handlers alter the fixtures in place; tests that exercise the
+// new delete/fetch endpoints reset them in afterEach via resetMutatedFixtures.
+const frameFixturesBackup = frameFixtures.map((f) => ({ ...f }));
+const sessionFixturesBackup = sessionFixtures.map((s) => ({ ...s }));
+
+export function resetFixtures() {
+    frameFixtures.splice(0, frameFixtures.length, ...frameFixturesBackup);
+    sessionFixtures.splice(0, sessionFixtures.length, ...sessionFixturesBackup);
+}
 
 export const searchFixtures = [
     {
@@ -469,4 +480,32 @@ export const handlers = [
             headers: { "Content-Type": "image/png" },
         }),
     ),
+    http.delete(`${base}/frames/:id`, ({ params }) => {
+        const id = Number(params.id);
+        const idx = frameFixtures.findIndex((f) => f.id === id);
+        if (idx === -1) return HttpResponse.json({ detail: "Frame not found" }, { status: 404 });
+        frameFixtures.splice(idx, 1);
+        return HttpResponse.json({ ok: true, image_deleted: true });
+    }),
+    http.delete(`${base}/sessions/:id`, ({ params }) => {
+        const id = Number(params.id);
+        const idx = sessionFixtures.findIndex((s) => s.id === id);
+        if (idx === -1) return HttpResponse.json({ detail: "Session not found" }, { status: 404 });
+        sessionFixtures.splice(idx, 1);
+        return HttpResponse.json({ ok: true });
+    }),
+    http.post(`${base}/sessions/:id/transcript/fetch`, ({ params }) => {
+        const id = Number(params.id);
+        const s = sessionFixtures.find((x) => x.id === id);
+        if (!s) return HttpResponse.json({ detail: "Session not found" }, { status: 404 });
+        if (!s.media_id) {
+            return HttpResponse.json(
+                { detail: "No video source recorded for this session" },
+                { status: 400 },
+            );
+        }
+        s.transcript = "Freshly fetched captions for testing.";
+        s.transcript_source = "fetch";
+        return HttpResponse.json({ ok: true, word_count: 6 });
+    }),
 ];

@@ -113,6 +113,18 @@ describe("groupSessionsBySource", () => {
         expect(groups[0].videos[0].openUrl).toBeNull();
         expect(groups[0].videos[0].coveragePct).toBe(5);
     });
+
+    it("never reports coverage above 100% even for legacy corrupt ranges (#1)", () => {
+        const groups = groupSessionsBySource([
+            session({
+                media_id: "v",
+                length: 100_000_000,
+                ranges: [[200_000_000, 400_000_000], [0, 50_000_000]],
+            }),
+        ]);
+        // 250M watched of a 100M video — clamped display, not 250%.
+        expect(groups[0].videos[0].coveragePct).toBe(100);
+    });
 });
 
 describe("cues", () => {

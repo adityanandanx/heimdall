@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import type { Frame, Session } from "@/lib/api";
-import { frameImageUrl } from "@/lib/api";
+import { deleteFrame, frameImageUrl } from "@/lib/api";
 import { formatTimeS } from "@/lib/format";
 import { srcOf } from "@/lib/frames";
 import {
@@ -55,6 +56,8 @@ export function DaySurface({ baseUrl, day, onDayChange, onOpenSearch, seek, onSe
     const [activeSugg, setActiveSugg] = useState(-1);
     const searchRef = useRef<HTMLInputElement>(null);
     const userSelectedRef = useRef(false);
+    const qc = useQueryClient();
+    const [deleteBusy, setDeleteBusy] = useState(false);
 
     const framesQ = useDayFrames(
         baseUrl,
@@ -68,6 +71,29 @@ export function DaySurface({ baseUrl, day, onDayChange, onOpenSearch, seek, onSe
     const frames = framesQ.data ?? [];
     const sessions = sessionsQ.data ?? [];
     const selectedFrame = selected ?? frames[frames.length - 1] ?? null;
+
+    // Invalidate both day queries after any destructive/manual backend mutation
+    // (#1): frames, sessions and transcript buttons all land on fresh data.
+    const invalidateDay = useCallback(() => {
+        void qc.invalidateQueries({ queryKey: ["day-frames", baseUrl] });
+        void qc.invalidateQueries({ queryKey: ["day-sessions", baseUrl] });
+    }, [qc, baseUrl]);
+
+    const deleteSelectedFrame = async () => {
+        if (!selectedFrame || deleteBusy) return;
+        if (!window.confirm("Delete this frame and its screenshot?")) return;
+        setDeleteBusy(true);
+        try {
+            await deleteFrame(baseUrl, selectedFrame.id);
+            userSelectedRef.current = false;
+            setSelected(null);
+            invalidateDay();
+        } catch (e) {
+            console.error(e);
+        } finally {
+            setDeleteBusy(false);
+        }
+    };
 
     // The box text is the single source of truth for the day's filter tokens
     // (kind/app/player/source/after/before); state derives from the parse,
@@ -90,6 +116,22 @@ export function DaySurface({ baseUrl, day, onDayChange, onOpenSearch, seek, onSe
         if (!userSelectedRef.current) setSelected(frames[frames.length - 1]);
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [frames, seek?.nonce]);
+
+    // Keep an open session popup live: after a transcript re-fetch or a session
+    // delete the refetched list is fresher than the snapshot the popup was
+    // opened with (#1). Rows are matched by id; missing rows (deleted) close
+    // the popup, surviving rows are swapped for the fresh objects. The ref
+    // guards against re-syncing our own write-back (same sessions identity).
+    const lastSyncedSessionsRef = useRef<Session[] | null>(null);
+    useEffect(() => {
+        if (!mediaPopup || !sessions.length) return;
+        if (lastSyncedSessionsRef.current === sessions) return;
+        lastSyncedSessionsRef.current = sessions;
+        const byId = new Map(sessions.map((s) => [s.id, s]));
+        const next = mediaPopup.map((s) => byId.get(s.id) ?? s).filter((s) => byId.has(s.id));
+        if (next.length === 0) setMediaPopup(null);
+        else setMediaPopup(next);
+    }, [sessions, mediaPopup]);
 
     const hits = useMemo(() => {
         const q = query.trim().toLowerCase();
@@ -573,6 +615,14 @@ export function DaySurface({ baseUrl, day, onDayChange, onOpenSearch, seek, onSe
                                     {caption.window_class}
                                     {caption.window_title ? ` · ${caption.window_title}` : ""}
                                 </span>
+                                {caption.source_url && (
+                                    <span
+                                        className="max-w-48 truncate font-mono text-[10px] text-faint"
+                                        title={caption.source_url}
+                                    >
+                                        {caption.source_url}
+                                    </span>
+                                )}
                                 <SourceBadge src={srcOf(caption)} />
                             </div>
                         )}
@@ -612,13 +662,21 @@ export function DaySurface({ baseUrl, day, onDayChange, onOpenSearch, seek, onSe
                             selectedApps={filters.apps}
                             onToggleApp={(cls) => toggleDayValue("app", cls)}
                             onClearApps={() => setDayQuery(removeOpTokens(dayQuery, "app"))}
+                            onDeleteFrame={() => void deleteSelectedFrame()}
+                            deleteBusy={deleteBusy}
                         />
                     )}
                 </div>
             </div>
 
             {mediaPopup && (
-                <SessionDetail sessions={mediaPopup} onClose={() => setMediaPopup(null)} onJump={jumpTo} />
+                <SessionDetail
+                    sessions={mediaPopup}
+                    baseUrl={baseUrl}
+                    onClose={() => setMediaPopup(null)}
+                    onJump={jumpTo}
+                    onMutated={invalidateDay}
+                />
             )}
         </div>
     );

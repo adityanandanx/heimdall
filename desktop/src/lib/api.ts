@@ -73,6 +73,7 @@ export interface Frame {
     window_title: string | null;
     fullscreen: number;
     trigger: string;
+    source_url: string | null;
     image_path: string;
     image_bytes: number | null;
     ocr_text: string | null;
@@ -299,4 +300,41 @@ export async function forgetData(
         throw new ApiError(detail);
     }
     return (await res.json()) as ForgetResult;
+}
+
+// ---- #65: manual deletes and transcript re-fetch ----
+
+/** DELETE a frame (row + image file) — true when the backend removed the image. */
+export async function deleteFrame(base: string, frameId: number): Promise<boolean> {
+    const res = await fetch(apiUrl(base, `/frames/${frameId}`), { method: "DELETE" });
+    if (!res.ok) throw new ApiError(`${res.status} ${res.statusText}`);
+    return ((await res.json()) as { image_deleted: boolean }).image_deleted;
+}
+
+/** DELETE one watch session — captions cache file is kept for other sessions. */
+export async function deleteSession(base: string, sessionId: number): Promise<void> {
+    const res = await fetch(apiUrl(base, `/sessions/${sessionId}`), { method: "DELETE" });
+    if (!res.ok) throw new ApiError(`${res.status} ${res.statusText}`);
+}
+
+/** POST — re-fetch captions for a session that ended without a transcript. */
+export async function fetchSessionTranscript(
+    base: string,
+    sessionId: number,
+): Promise<{ wordCount: number }> {
+    const res = await fetch(apiUrl(base, `/sessions/${sessionId}/transcript/fetch`), {
+        method: "POST",
+    });
+    if (!res.ok) {
+        let detail = `${res.status} ${res.statusText}`;
+        try {
+            const body = (await res.json()) as { detail?: unknown };
+            if (body?.detail) detail = String(body.detail);
+        } catch {
+            /* keep status text */
+        }
+        throw new ApiError(detail);
+    }
+    const body = (await res.json()) as { word_count: number };
+    return { wordCount: body.word_count };
 }

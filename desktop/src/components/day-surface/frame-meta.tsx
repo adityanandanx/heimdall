@@ -16,20 +16,48 @@ interface FrameMetaProps {
     selectedApps: string[];
     onToggleApp: (cls: string) => void;
     onClearApps: () => void;
+    onDeleteFrame: () => void;
+    deleteBusy: boolean;
 }
 
-export function FrameMeta({ frame, recapResult, onRunRecap, recapRunning, apps, selectedApps, onToggleApp, onClearApps }: FrameMetaProps) {
+export function FrameMeta({ frame, recapResult, onRunRecap, recapRunning, apps, selectedApps, onToggleApp, onClearApps, onDeleteFrame, deleteBusy }: FrameMetaProps) {
     const src = srcOf(frame);
     const text = frame.a11y_text || frame.ocr_text || "";
     return (
         <>
-            <h2 className="mb-2.5 mt-6 text-[11px] tracking-[1.2px] text-faint uppercase first:mt-0">Frame</h2>
+            <div className="mt-6 mb-2.5 flex items-center justify-between first:mt-0">
+                <h2 className="text-[11px] tracking-[1.2px] text-faint uppercase">Frame</h2>
+                <button
+                    type="button"
+                    onClick={onDeleteFrame}
+                    disabled={deleteBusy}
+                    data-testid="delete-frame"
+                    className="rounded-sm border border-transparent px-1.5 py-0.5 font-mono text-[10px] text-faint transition-colors hover:border-danger/40 hover:text-danger disabled:opacity-40"
+                >
+                    {deleteBusy ? "deleting…" : "delete"}
+                </button>
+            </div>
             <div className="flex flex-col gap-2 rounded-md border border-line bg-surface-2 p-3 text-xs">
                 <Row k="time" v={formatTimeS(frame.ts) ?? "—"} mono />
                 <div className="flex items-center justify-between gap-2">
                     <span className="shrink-0 text-faint">source</span>
                     <SourceBadge src={src} />
                 </div>
+                {frame.source_url && (
+                    <div className="flex justify-between gap-2.5">
+                        <span className="shrink-0 text-faint">url</span>
+                        <a
+                            href={frame.source_url}
+                            target="_blank"
+                            rel="noreferrer"
+                            title={frame.source_url}
+                            className="min-w-0 truncate font-mono text-[11px] text-primary hover:underline"
+                            data-testid="frame-source-url"
+                        >
+                            {frame.source_url}
+                        </a>
+                    </div>
+                )}
                 <Row k="window" v={frame.window_class} mono />
                 <p className="text-xs break-words text-dim">{frame.window_title || "(untitled)"}</p>
                 <Row k="monitor" v={frame.monitor != null ? String(frame.monitor) : "—"} mono />

@@ -1,14 +1,17 @@
-import { useEffect, useMemo } from "react";
-import { X } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { Trash2, X } from "lucide-react";
 import type { Session } from "@/lib/api";
+import { deleteSession, fetchSessionTranscript } from "@/lib/api";
 import { formatDateTime, formatTime } from "@/lib/format";
 import { sessionWatchedSec, fmtDur, playerColor } from "@/lib/timeline";
 import { cn } from "@/lib/utils";
 
 interface SessionDetailProps {
     sessions: Session[];
+    baseUrl: string;
     onClose: () => void;
     onJump: (ts: number) => void;
+    onMutated: () => void;
 }
 
 interface Cue {
@@ -18,7 +21,10 @@ interface Cue {
     text?: string;
 }
 
-export function SessionDetail({ sessions, onClose, onJump }: SessionDetailProps) {
+export function SessionDetail({ sessions, baseUrl, onClose, onJump, onMutated }: SessionDetailProps) {
+    const [deleteBusy, setDeleteBusy] = useState(false);
+    const [fetchBusy, setFetchBusy] = useState(false);
+    const [fetchError, setFetchError] = useState<string | null>(null);
     useEffect(() => {
         const onKey = (e: KeyboardEvent) => {
             if (e.key === "Escape") onClose();
@@ -44,6 +50,35 @@ export function SessionDetail({ sessions, onClose, onJump }: SessionDetailProps)
             return [];
         }
     }, [main.cues_json]);
+
+    const deleteSessionRow = async () => {
+        if (deleteBusy) return;
+        if (!window.confirm(`Delete this "${main.media_title ?? "untitled"}" session?`)) return;
+        setDeleteBusy(true);
+        try {
+            await deleteSession(baseUrl, main.id);
+            onMutated();
+            onClose();
+        } catch (e) {
+            console.error(e);
+        } finally {
+            setDeleteBusy(false);
+        }
+    };
+
+    const fetchTranscript = async () => {
+        if (fetchBusy) return;
+        setFetchBusy(true);
+        setFetchError(null);
+        try {
+            await fetchSessionTranscript(baseUrl, main.id);
+            onMutated();
+        } catch (e) {
+            setFetchError(e instanceof Error ? e.message : String(e));
+        } finally {
+            setFetchBusy(false);
+        }
+    };
 
     return (
         <div
@@ -129,9 +164,22 @@ export function SessionDetail({ sessions, onClose, onJump }: SessionDetailProps)
                     )}
 
                     <section className="mb-4">
-                        <h4 className="mb-2 text-[10px] font-semibold tracking-[1.2px] text-faint uppercase">
-                            Transcript
-                        </h4>
+                        <div className="mb-2 flex items-center gap-2">
+                            <h4 className="text-[10px] font-semibold tracking-[1.2px] text-faint uppercase">
+                                Transcript
+                            </h4>
+                            {!main.transcript && main.media_id && (
+                                <button
+                                    type="button"
+                                    onClick={fetchTranscript}
+                                    disabled={fetchBusy}
+                                    data-testid="fetch-transcript"
+                                    className="ml-auto rounded-sm border border-line bg-surface px-2 py-0.5 font-mono text-[10px] text-dim transition-colors hover:border-primary hover:text-foreground disabled:opacity-40"
+                                >
+                                    {fetchBusy ? "fetching…" : "⟳ fetch now"}
+                                </button>
+                            )}
+                        </div>
                         <p
                             className={cn(
                                 "max-h-[150px] overflow-y-auto rounded-md border border-line bg-surface-2 p-3 text-[11px] leading-relaxed text-dim",
@@ -140,16 +188,32 @@ export function SessionDetail({ sessions, onClose, onJump }: SessionDetailProps)
                         >
                             {main.transcript ?? "No transcript captured."}
                         </p>
+                        {fetchError && (
+                            <p className="mt-1.5 text-[10px] text-danger" data-testid="fetch-transcript-error">
+                                {fetchError}
+                            </p>
+                        )}
                     </section>
                 </div>
 
-                <div className="shrink-0 border-t border-line p-3.5">
+                <div className="flex gap-2 border-t border-line p-3.5">
                     <button
                         type="button"
                         onClick={() => onJump(new Date(main.ts_start).getTime())}
-                        className="w-full rounded-md bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground transition-[filter] hover:brightness-110"
+                        className="flex-1 rounded-md bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground transition-[filter] hover:brightness-110"
                     >
                         Jump to moment
+                    </button>
+                    <button
+                        type="button"
+                        onClick={deleteSessionRow}
+                        disabled={deleteBusy}
+                        data-testid="delete-session"
+                        aria-label="delete session"
+                        className="flex items-center gap-1.5 rounded-md border border-line px-3 py-2 text-xs text-dim transition-colors hover:border-danger/50 hover:text-danger disabled:opacity-40"
+                    >
+                        <Trash2 className="size-3.5" />
+                        {deleteBusy ? "deleting…" : "delete"}
                     </button>
                 </div>
             </div>
