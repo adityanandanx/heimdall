@@ -174,6 +174,25 @@ describe("DaySurface", () => {
         expect(await screen.findByTestId("day-suggest")).toHaveTextContent(/watch-lane\.tsx/); // frames
     });
 
+    it("sorts day suggestions newest-first by default, with the toggle going chronological", async () => {
+        renderDay();
+        const input = await screen.findByPlaceholderText(/Search the day/);
+        fireEvent.focus(input);
+        fireEvent.change(input, { target: { value: "omurice" } });
+        const listbox = await screen.findByTestId("day-suggest");
+        // Default: newest first — the 11:00 frame precedes the 10:30 and 10:00
+        // ones, and the 10:00 session lands after the newest frame.
+        const times = [...listbox.querySelectorAll("[role=option]")]
+            .map((o) => o.textContent ?? "")
+            .map((t) => t.match(/\d{2}:\d{2}/)?.[0]);
+        expect(times.slice(0, 3)).toEqual(["11:00", "10:30", "10:00"]);
+        fireEvent.click(screen.getByRole("button", { name: "oldest" }));
+        const chrono = [...listbox.querySelectorAll("[role=option]")]
+            .map((o) => o.textContent ?? "")
+            .map((t) => t.match(/\d{2}:\d{2}/)?.[0]);
+        expect(chrono.slice(0, 3)).toEqual(["10:00", "10:30", "11:00"]);
+    });
+
     it("clicking a suggestion jumps the timeline and clears the query", async () => {
         const { onOpenSearch } = renderDay();
         const input = await screen.findByPlaceholderText(/Search the day/);

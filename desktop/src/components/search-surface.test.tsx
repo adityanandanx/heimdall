@@ -437,13 +437,13 @@ describe("SearchSurface", () => {
         expect(screen.queryByRole("group", { name: "sort order" })).not.toBeInTheDocument();
     });
 
-    it("defaults to relevance sort once text is present (#62)", async () => {
+    it("defaults to newest sort once text is present (#62)", async () => {
         renderSearch();
         fireEvent.change(screen.getByLabelText("search query"), { target: { value: "roger" } });
         await waitFor(() =>
             expect(new URL(searchRequestUrls[searchRequestUrls.length - 1]).searchParams.get("q")).toBe("roger"),
         );
-        expect(new URL(searchRequestUrls[searchRequestUrls.length - 1]).searchParams.get("sort")).toBe("score");
+        expect(new URL(searchRequestUrls[searchRequestUrls.length - 1]).searchParams.get("sort")).toBe("ts");
         const toggle = screen.getByRole("group", { name: "sort order" });
         expect(toggle).toHaveTextContent("relevance");
         expect(toggle).toHaveTextContent("newest");
@@ -453,21 +453,21 @@ describe("SearchSurface", () => {
         renderSearch();
         fireEvent.change(screen.getByLabelText("search query"), { target: { value: "roger" } });
         await waitFor(() => expect(searchRequestUrls.length).toBe(2));
-        expect(screen.getByRole("button", { name: "relevance" })).toHaveAttribute("aria-pressed", "true");
-        fireEvent.click(screen.getByRole("button", { name: "newest" }));
         expect(screen.getByRole("button", { name: "newest" })).toHaveAttribute("aria-pressed", "true");
-        await waitFor(() =>
-            expect(new URL(searchRequestUrls[searchRequestUrls.length - 1]).searchParams.get("sort")).toBe("ts"),
-        );
-        // Back to relevance: the ts→score transition reuses the cached score
-        // scope (no new request), so assert the active state instead.
         fireEvent.click(screen.getByRole("button", { name: "relevance" }));
         expect(screen.getByRole("button", { name: "relevance" })).toHaveAttribute("aria-pressed", "true");
+        await waitFor(() =>
+            expect(new URL(searchRequestUrls[searchRequestUrls.length - 1]).searchParams.get("sort")).toBe("score"),
+        );
+        // Back to new: the score→ts transition reuses the cached newest
+        // scope (no new request), so assert the active state instead.
+        fireEvent.click(screen.getByRole("button", { name: "newest" }));
+        expect(screen.getByRole("button", { name: "newest" })).toHaveAttribute("aria-pressed", "true");
         fireEvent.change(screen.getByLabelText("search query"), { target: { value: "roger z" } });
         await waitFor(() =>
             expect(new URL(searchRequestUrls[searchRequestUrls.length - 1]).searchParams.get("q")).toBe("roger z"),
         );
-        expect(new URL(searchRequestUrls[searchRequestUrls.length - 1]).searchParams.get("sort")).toBe("score");
+        expect(new URL(searchRequestUrls[searchRequestUrls.length - 1]).searchParams.get("sort")).toBe("ts");
     });
 
     it("keeps the chosen query and sort across remounts within the session (#62)", async () => {
@@ -476,9 +476,9 @@ describe("SearchSurface", () => {
         );
         fireEvent.change(screen.getByLabelText("search query"), { target: { value: "roger" } });
         await waitFor(() => expect(searchRequestUrls.length).toBe(2));
-        fireEvent.click(screen.getByRole("button", { name: "newest" }));
+        fireEvent.click(screen.getByRole("button", { name: "relevance" }));
         await waitFor(() =>
-            expect(new URL(searchRequestUrls[searchRequestUrls.length - 1]).searchParams.get("sort")).toBe("ts"),
+            expect(new URL(searchRequestUrls[searchRequestUrls.length - 1]).searchParams.get("sort")).toBe("score"),
         );
         unmount(); // navigating away unmounts the surface…
 
@@ -490,7 +490,7 @@ describe("SearchSurface", () => {
         await waitFor(() =>
             expect(new URL(searchRequestUrls[searchRequestUrls.length - 1]).searchParams.get("q")).toBe("roger z"),
         );
-        expect(new URL(searchRequestUrls[searchRequestUrls.length - 1]).searchParams.get("sort")).toBe("ts");
+        expect(new URL(searchRequestUrls[searchRequestUrls.length - 1]).searchParams.get("sort")).toBe("score");
     });
 
     it("writes the fullscreen segmented control into the box and params (#63)", async () => {

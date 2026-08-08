@@ -12,7 +12,7 @@ export interface SessionSearchState {
     sort: SearchSort;
 }
 
-let state: SessionSearchState = { q: "", filters: DEFAULT_FILTERS, sort: "score" };
+let state: SessionSearchState = { q: "", filters: DEFAULT_FILTERS, sort: "ts" };
 const listeners = new Set<() => void>();
 
 function emit(): void {
@@ -30,7 +30,7 @@ export function setSessionSearch(patch: Partial<SessionSearchState>): void {
 
 /** Test seam: back to a pristine, untouched store. */
 export function resetSessionSearch(): void {
-    state = { q: "", filters: DEFAULT_FILTERS, sort: "score" };
+    state = { q: "", filters: DEFAULT_FILTERS, sort: "ts" };
     emit();
 }
 

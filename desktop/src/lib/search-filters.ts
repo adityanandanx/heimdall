@@ -156,15 +156,17 @@ export function dateRangeOf(
 
 /** The /search query params for the current query + filters.
  *
- * `sort` only matters with a text query: text present → `score` (relevance,
- * the default, #62) or the user's chosen `ts`; no text → browse mode is
- * always newest-first (`ts`). Frame attributes (ws/monitor/fullscreen) apply
- * to frames only — they are never sent for a session-only scope.
+ * `sort` only matters with a text query: text present uses the user's
+ * choice, defaulting to `ts` (newest-first, the app-wide default — the
+ * relevance lever stays available via the sort toggle); no text → browse
+ * mode is always newest-first (`ts`). Frame attributes
+ * (ws/monitor/fullscreen) apply to frames only — they are never sent for a
+ * session-only scope.
  */
 export function compileSearchParams(
     f: SearchFilters,
     q: string,
-    sort: "score" | "ts" = "score",
+    sort: "score" | "ts" = "ts",
 ): URLSearchParams {
     const params = new URLSearchParams();
     const trimmed = q.trim();

@@ -54,6 +54,7 @@ export function DaySurface({ baseUrl, day, onDayChange, onOpenSearch, seek, onSe
     const [mediaPopup, setMediaPopup] = useState<Session[] | null>(null);
     const [suggestFocused, setSuggestFocused] = useState(false);
     const [activeSugg, setActiveSugg] = useState(-1);
+    const [daySort, setDaySort] = useState<"newest" | "oldest">("newest");
     const searchRef = useRef<HTMLInputElement>(null);
     const userSelectedRef = useRef(false);
     const qc = useQueryClient();
@@ -146,24 +147,28 @@ export function DaySurface({ baseUrl, day, onDayChange, onOpenSearch, seek, onSe
     const suggestions = useMemo(() => {
         const q = query.trim().toLowerCase();
         if (q.length < 2) return [];
+        const dir = daySort === "newest" ? -1 : 1;
+        const frameTs = (f: Frame) => new Date(f.ts).getTime();
+        const sessTs = (s: Session) => new Date(s.ts_start).getTime();
+        const hitFrames = frames
+            .filter((f) => matchesDayFrame(filters, f) && frameMatchText(f, q))
+            .sort((a, b) => dir * (frameTs(a) - frameTs(b)))
+            .slice(0, 5);
         const out: Suggestion[] = [];
-        const seenTitles = new Set<string>();
-        for (const f of frames) {
-            if (out.length >= 5) break;
-            if (!matchesDayFrame(filters, f)) continue;
-            const hit = frameMatchText(f, q);
-            if (!hit) continue;
+        for (const f of hitFrames) {
             out.push({
                 kind: "frame",
                 frame: f,
-                ts: new Date(f.ts).getTime(),
+                ts: frameTs(f),
                 title: f.window_title ?? f.window_class,
-                sub: hit,
+                sub: frameMatchText(f, q)!,
             });
         }
-        for (const s of sessions) {
+        const seenTitles = new Set<string>();
+        for (const s of sessions
+            .filter((s) => matchesDaySession(filters, s))
+            .sort((a, b) => dir * (sessTs(a) - sessTs(b)))) {
             if (out.length >= 8) break;
-            if (!matchesDaySession(filters, s)) continue;
             const text = `${s.media_title ?? ""} ${s.transcript ?? ""}`.toLowerCase();
             if (!text.includes(q)) continue;
             const title = s.media_title ?? s.player;
@@ -180,7 +185,7 @@ export function DaySurface({ baseUrl, day, onDayChange, onOpenSearch, seek, onSe
             });
         }
         return out;
-    }, [query, filters, frames, sessions]);
+    }, [query, filters, frames, sessions, daySort]);
 
     useEffect(() => setActiveSugg(-1), [dayQuery]);
 
@@ -399,6 +404,38 @@ export function DaySurface({ baseUrl, day, onDayChange, onOpenSearch, seek, onSe
                             {/* Filter widgets zone (#64): day-scoped kind/app/
                                 player/source + time-of-day instead of a range. */}
                             <div className="flex flex-wrap items-center gap-1.5 border-b border-line px-2 py-2">
+                                <div
+                                    role="group"
+                                    aria-label="day sort order"
+                                    className="flex overflow-hidden rounded-full border border-line"
+                                >
+                                    <button
+                                        type="button"
+                                        aria-pressed={daySort === "newest"}
+                                        onClick={() => setDaySort("newest")}
+                                        className={cn(
+                                            "px-2 py-0.5 text-[10px] transition-colors",
+                                            daySort === "newest"
+                                                ? "bg-primary/15 text-primary"
+                                                : "text-dim hover:text-foreground",
+                                        )}
+                                    >
+                                        newest
+                                    </button>
+                                    <button
+                                        type="button"
+                                        aria-pressed={daySort === "oldest"}
+                                        onClick={() => setDaySort("oldest")}
+                                        className={cn(
+                                            "px-2 py-0.5 text-[10px] transition-colors",
+                                            daySort === "oldest"
+                                                ? "bg-primary/15 text-primary"
+                                                : "text-dim hover:text-foreground",
+                                        )}
+                                    >
+                                        oldest
+                                    </button>
+                                </div>
                                 <div
                                     role="group"
                                     aria-label="day kind filter"
