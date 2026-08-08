@@ -17,6 +17,18 @@ sessions, status and a settings surface that writes heimdall's own `config.yaml`
 live — OCR engine, exclusions, window rules, scheduled pipes, pause, forget —
 with no restart: the daemon and server hot-reload on a `settings.dirty` marker.
 
+## Screenshots
+
+<p align="center">
+  <img src="docs/images/screenshot_01.jpg" alt="Day timeline — captured frames with metadata and OCR text, plus the day strip" width="48%"/>
+  <img src="docs/images/screenshot_02.jpg" alt="Search — full-text search across a11y/OCR text and watch transcripts, with filters and scores" width="48%"/>
+  <br/>
+  <img src="docs/images/screenshot_03.jpg" alt="Sessions — watch sessions with per-video stats, coverage and transcript" width="48%"/>
+  <img src="docs/images/screenshot_04.jpg" alt="Status — dashboard with server, capture daemon, LLM, players and data cards" width="48%"/>
+  <br/>
+  <img src="docs/images/screenshot_05.jpg" alt="Settings — server URL, auto-refresh, OCR engine, exclusions and window rules" width="48%"/>
+</p>
+
 ## Requirements
 
 - Arch + Hyprland, `grim`, `playerctl`, `/usr/bin/llama-server`
@@ -32,9 +44,8 @@ with no restart: the daemon and server hot-reload on a `settings.dirty` marker.
 ## Install
 
 ```sh
-uv sync                    # core deps + yt-dlp (captions) + OCR engines (rapidocr, openvino)
+uv sync                    # installs the CLI + core deps (yt-dlp captions + rapidocr/openvino OCR)
 uv sync --extra asr        # + faster-whisper (lazy ASR for subtitle-less VLC files)
-uv build          # or: uv pip install -e .
 cd desktop && pnpm install # desktop client (Tauri 2)
 ```
 
@@ -46,11 +57,13 @@ Entry point: `heimdall` (CLI), `heimdall serve` (API + scheduler).
 ~/.heimdall/
   config.yaml            # tunables (see below) — the single source of truth
   data.db                # SQLite (WAL): frames, tracks, events, watch_sessions, *_fts
-  capture.heartbeat      # mtime/ts written by the capture daemon
+  capture.heartbeat      # ts written by the capture daemon (15s cadence)
   capture.engine         # active OCR engine (npu|cpu) published by the daemon
+  capture.request/.ack   # manual-capture handshake (`heimdall capture` -> POST /capture)
   settings.dirty         # marker; touched on /settings writes, triggers hot-reload
   frames/YYYY/MM/DD/     # JPEGs, one per capture
   captions/              # cached caption content, keyed by media_id
+  extensions/            # built native-messaging extension copy (install-messenger-host.sh)
   output/                # day-recap-*.md, time-breakdown-*.md
   logs/                  # optional, if you pass --log-dir
 ```
@@ -62,7 +75,9 @@ data_dir: ~/.heimdall
 api: {bind: 127.0.0.1, port: 3030}
 llama_server: {base_url: http://127.0.0.1:8080, model: gemma-4-E2B-it-qat-q4_0}
 capture: {debounce_s: 1.5, min_interval_s: 10, keepalive_min: 5, extract_workers: 1,
-          extraction: auto, change_gate: true, ocr_engine: auto, paused: false}
+          extraction: auto, change_gate: true, window_class_merge: {},
+          ocr_engine: auto, paused: false}
+asr: {model: small, device: cpu, compute_type: int8}
 watch: {pause_ends_session_s: 60, poll_interval_s: 30, media_resolver: extension,
         excluded_players: [sidra], excluded_windows: []}
 scheduler: {day_recap: "0 23 * * *", time_breakdown: "5 23 * * *"}
@@ -87,6 +102,10 @@ daemon (15s poll) and the server re-read config live:
   visible (amber hint in the client)
 - `capture.extraction` — `auto` (a11y text, else OCR) | `a11y` only | `ocr` only
 - `capture.paused` — full-stop pause: no frames, extraction, watch sessions or ASR
+- `capture.change_gate` — per-window phash gate: unchanged keepalives are stored
+  but not re-extracted
+- `capture.window_class_merge` — `{window_class: ocr_also}`: classes that always
+  store OCR text alongside a11y text
 - `watch.excluded_players` / `watch.excluded_windows` — MPRIS players and window
   classes that never produce frames/sessions (scheduled captures only — manual
   captures bypass the gate)
@@ -123,6 +142,8 @@ exec-once = ~/heimdall/scripts/start-capture.sh --log-dir ~/.heimdall/logs
 exec-once = uv run heimdall serve > ~/.heimdall/logs/serve.log 2>&1
 ```
 
+(paths assume the repo lives at `~/heimdall` — adjust to your checkout)
+
 A crashed capture gaps data until noticed; scheduled pipes only run while
 `serve` is up. Logs are per-terminal stdout/stderr or `~/.heimdall/logs/`.
 
@@ -150,14 +171,14 @@ Run once after setup; everything is a plain script, no service manager.
   have no caption track — `uv sync --extra asr`, then the `small` model downloads
   on first use. Without it, ASR jobs report unavailable and sessions stay
   title-only.
-- [ ] **ffmpeg**: required for lazy ASR (`/usr/bin/ffmpeg`).
+- [ ] **ffmpeg**: required for lazy ASR (anywhere on `PATH`).
 - [ ] **Autostart**: opt-in, OFF by default — add the `exec-once` lines above
   only if you want capture + pipes at login.
 
 ## CLI
 
 ```sh
-heimdall search <q> [--window-class --start --end --limit --offset --json]
+heimdall search <q> [--kind --window-class --player --start --end --limit --offset --json]
 heimdall sessions [--player --start --end --limit --offset --json]
 heimdall recap [today|yesterday|YYYY-MM-DD]
 heimdall breakdown [day] [--days N] [--json]
@@ -166,6 +187,9 @@ heimdall capture [--json]
 heimdall run <pipe> [--day today]
 heimdall serve
 ```
+
+Every command accepts the global `--config <path>` flag (default
+`~/.heimdall/config.yaml`); `--json` prints raw JSON output.
 
 `breakdown --days N` merges the last N day-files deterministically (no extra
 LLM pass) into `output/time-breakdown-{endday}-{N}d.md`.
@@ -177,7 +201,7 @@ LLM pass) into `output/time-breakdown-{endday}-{N}d.md`.
 - [ ] `cat ~/.heimdall/capture.engine` → `npu` or `cpu`; `heimdall status --json` → `capture.ocr_engine.active` matches
 - [ ] play/pause music → `select * from tracks;` rows appear with `playing`/`paused`
 - [ ] `heimdall serve` starts; `curl -s localhost:3030/health` → ok; `curl -s localhost:3030/settings` lists the 12 writable keys
-- [ ] `curl -X POST localhost:3030/settings -d '{"key":"capture.ocr_engine","value":"cpu"}'` → daemon reloads; flip back to `auto`
+- [ ] `curl -X POST localhost:3030/settings -H 'Content-Type: application/json' -d '{"key":"capture.ocr_engine","value":"cpu"}'` → daemon reloads; flip back to `auto`
 - [ ] `heimdall status` shows server ok, capture alive, llama up, today's frame
   count, extraction mode + OCR engine (configured/active), alive MPRIS players,
   the last watch-session, scheduler next runs and pending ASR jobs
