@@ -42,9 +42,13 @@ CLASS_HINTS = {
     "kitty": ["kitty"],
 }
 
-_MAX_DEPTH = 12
-_MAX_CHILDREN = 500
-_MAX_NODES = 4000
+# Real-world pages (LinkedIn, GitHub, dashboards) nest well beyond a dozen
+# levels of AT-SPI nodes; the measured ~50ms walk covers a full content tree
+# comfortably at these caps (extraction runs in the async queue, so a heavier
+# tree never blocks a capture).
+_MAX_DEPTH = 32
+_MAX_CHILDREN = 2000
+_MAX_NODES = 20000
 
 
 # ---- pure routing logic (secondary seam) ----
