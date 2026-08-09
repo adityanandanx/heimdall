@@ -87,7 +87,7 @@ function App() {
                         baseUrl={serverUrl}
                         focusNonce={focusNonce}
                         seed={searchSeed}
-                        onPick={(item: SearchItem) => jumpTo(new Date(item.ts).getTime())}
+                        onPick={(item: SearchItem) => jumpTo(new Date(item.ts ?? item.ts_start ?? "").getTime())}
                     />
                 );
             case "sessions":

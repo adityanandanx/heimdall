@@ -106,6 +106,9 @@ export interface Session {
 export interface SearchItem {
     id: number;
     ts: string;
+    /** Sessions only — session rows also expose their wall time here (alias
+     * of ts_start); frames have neither field. */
+    ts_start?: string;
     /** Frames only — session rows carry no window_class. */
     window_class: string | null;
     window_title: string | null;

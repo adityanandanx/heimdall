@@ -274,3 +274,67 @@ def test_pause_over_threshold_closes_via_poll(tmp_path):
     assert total == 1
     assert items[0]["pos_end"] == 1_200_000_000
     assert items[0]["ranges"] == [[900_000_000, 1_200_000_000]]
+
+
+# ---- chromium stopped(0) is a tab-hide, not a session end ----
+
+CHROMIUM_LINE = "Playing||Little Coder||chromium|754000000|213000000|"
+CHROMIUM_STOPPED = "Stopped||Little Coder||chromium|0|0|"
+
+def test_chromium_stopped_hide_keeps_live_row(tmp_path):
+    """A stopped(0) from Chromium is a tab hiding: the live row stays open and
+    a resume continues the same session instead of finalizing a 2-row pair."""
+    tools = _FakeWatchTools(players=["chromium.instance1220"], position=755_000_000)
+    daemon = _daemon(tmp_path, tools)
+    daemon._on_track(CHROMIUM_LINE)
+    daemon._on_track(CHROMIUM_STOPPED)  # tab hidden
+    total, items = daemon.db.list_watch_sessions()
+    assert total == 1
+    assert items[0]["live"] == 1
+    assert len(daemon.tracker.open_sessions()) == 1
+
+    daemon._on_track(CHROMIUM_LINE)  # tab visible again
+    total, items = daemon.db.list_watch_sessions()
+    assert total == 1  # same row: hide/show is one session
+    assert items[0]["live"] == 1
+    assert items[0]["pos_start"] == 754_000_000
+
+
+def test_chromium_absent_poll_does_not_exit(tmp_path):
+    """Chromium deregisters its MPRIS instance while hidden, so missing from
+    `playerctl -l` must not end the session."""
+    tools = _FakeWatchTools(players=[], position=None)
+    daemon = _daemon(tmp_path, tools)
+    daemon._on_track(CHROMIUM_LINE)
+    daemon._watch_poll_once()
+    total, items = daemon.db.list_watch_sessions()
+    assert total == 1
+    assert items[0]["live"] == 1  # absence alone never closes chromium
+    assert len(daemon.tracker.open_sessions()) == 1
+
+
+def test_chromium_stale_past_threshold_closes_dead_tab(tmp_path):
+    """A tab that is truly gone (no lines, absent player, > threshold) closes."""
+    tools = _FakeWatchTools(players=[], position=None)
+    daemon = _daemon(tmp_path, tools)
+    daemon.tracker.pause_ends_session_s = -1.0  # any silence is over threshold
+    daemon._on_track(CHROMIUM_LINE)
+    daemon._on_track(CHROMIUM_STOPPED)
+    daemon._watch_poll_once()
+    total, items = daemon.db.list_watch_sessions()
+    assert total == 1
+    assert items[0]["live"] == 0
+    assert items[0]["pos_end"] == 0
+    assert daemon._live_rows == {}
+
+
+def test_vlc_stopped_zero_still_closes_instantly(tmp_path):
+    """Non-chromium players keep the old stop semantics: stopped(0) exits."""
+    tools = _FakeWatchTools(players=["vlc"], position=900_000_000)
+    daemon = _daemon(tmp_path, tools)
+    daemon._on_track(VLC_LINE)
+    daemon._on_track(STOPPED_VLC)
+    total, items = daemon.db.list_watch_sessions()
+    assert total == 1
+    assert items[0]["live"] == 0
+    assert items[0]["pos_end"] == 0

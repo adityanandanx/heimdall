@@ -34,6 +34,9 @@ export function useDaySessions(baseUrl: string, day: string, refetchIntervalMs: 
     });
 }
 
+// Live-follow cadence for today's surfaces (also drives the sessions tab).
+export const FOLLOW_POLL_MS = 15_000;
+
 export function useRecentSessions(baseUrl: string, days = 7) {
     return useQuery({
         queryKey: ["recent-sessions", baseUrl, days],
@@ -41,6 +44,7 @@ export function useRecentSessions(baseUrl: string, days = 7) {
         enabled: !!baseUrl,
         staleTime: 30_000,
         refetchOnWindowFocus: false,
+        refetchInterval: FOLLOW_POLL_MS,
     });
 }
 

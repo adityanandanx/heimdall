@@ -449,8 +449,16 @@ class CaptureDaemon:
             self._persist_session(closed)
         elif parsed["status"] == "paused":
             self.tracker.pause(player, parsed["position_us"], now_ms)
+        elif parsed["position_us"] > 0:
+            closed = self.tracker.stop(player, parsed["position_us"], now_ms)
+            self._persist_session(closed)
+        elif normalize_player(player) == "chromium":
+            # Chromium emits stopped (position 0) when the tab hides; that is
+            # a pause of the same session, not an exit. A tab that truly dies
+            # still closes: the poll `stale` path ends it past the threshold.
+            self.tracker.suspend(player, now_ms)
         else:
-            closed = self.tracker.stop(player, parsed["position_us"], now_ms) if parsed["position_us"] > 0 else self.tracker.exit(player, now_ms)
+            closed = self.tracker.exit(player, now_ms)
             self._persist_session(closed)
         self._sync_live_rows(now_ms)
 
@@ -498,7 +506,13 @@ class CaptureDaemon:
         now_ms = int(time.time() * 1000)
         for player in list(self.tracker.open_sessions()):
             if players is not None and not _player_present(player, players):
-                self._persist_session(self.tracker.exit(player, now_ms))
+                # Chromium removes its MPRIS instance whenever the tab hides,
+                # so absence never ends it; `stale` closes it once the silence
+                # outlasts the pause threshold. Real players still exit.
+                if normalize_player(player) != "chromium":
+                    self._persist_session(self.tracker.exit(player, now_ms))
+                else:
+                    self._persist_session(self.tracker.stale(player, now_ms))
                 continue
             position_us = self.tools.playerctl_position(player)
             if position_us is None:

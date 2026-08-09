@@ -22,8 +22,9 @@ import {
 } from "@/lib/query-language";
 import { KINDS, SOURCES } from "@/lib/search-filters";
 import { dayStrOf, frameNear, shiftDay } from "@/lib/timeline";
+import { rememberFrame, savedFrame } from "@/lib/day-selection";
 import { cn } from "@/lib/utils";
-import { useDayFrames, useDaySessions, useRunPipe, useStatus } from "@/hooks/use-day-browser";
+import { FOLLOW_POLL_MS, useDayFrames, useDaySessions, useRunPipe, useStatus } from "@/hooks/use-day-browser";
 import { Filmstrip } from "./filmstrip";
 import { FrameMeta, SourceBadge } from "./frame-meta";
 import { SessionDetail } from "./session-detail";
@@ -42,9 +43,6 @@ type Suggestion =
     | { kind: "session"; session: Session; ts: number; title: string; sub: string };
 
 type DayChip = { id: string; label: string };
-
-/** Follow-live poll cadence for today's frames (ms). */
-const FOLLOW_POLL_MS = 15_000;
 
 export function DaySurface({ baseUrl, day, onDayChange, onOpenSearch, seek, onSeekDone }: DaySurfaceProps) {
     const [ppm, setPpm] = useState(14);
@@ -110,10 +108,24 @@ export function DaySurface({ baseUrl, day, onDayChange, onOpenSearch, seek, onSe
             const f = frameNear(frames, seek.ts);
             userSelectedRef.current = true;
             setSelected(f);
+            rememberFrame(day, f.id);
             onSeekDone();
             return;
         }
-        if (!userSelectedRef.current) setSelected(frames[frames.length - 1]);
+        if (!userSelectedRef.current) {
+            const saved = savedFrame(day);
+            const savedFrame_ = saved !== null ? frames.find((f) => f.id === saved) ?? null : null;
+            if (savedFrame_) {
+                // Returning to a day you were browsing: restore the exact
+                // frame, not the newest one.
+                userSelectedRef.current = true;
+                setSelected(savedFrame_);
+            } else {
+                const latest = frames[frames.length - 1];
+                setSelected(latest);
+                rememberFrame(day, latest.id);
+            }
+        }
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [frames, seek?.nonce]);
 
@@ -193,13 +205,15 @@ export function DaySurface({ baseUrl, day, onDayChange, onOpenSearch, seek, onSe
         (s: Suggestion) => {
             if (!frames.length) return;
             userSelectedRef.current = true;
-            if (s.kind === "frame") setSelected(s.frame);
-            else setSelected(frameNear(frames, s.ts));
+            if (s.kind === "frame") {
+                setSelected(s.frame);
+                rememberFrame(day, s.frame.id);
+            } else setSelected(frameNear(frames, s.ts));
             setDayQuery("");
             setSuggestFocused(false);
             searchRef.current?.blur();
         },
-        [frames],
+        [frames, day],
     );
 
     // Widget ↓ text: the box is authoritative, so widget changes rewrite the
@@ -255,9 +269,11 @@ export function DaySurface({ baseUrl, day, onDayChange, onOpenSearch, seek, onSe
         (delta: number) => {
             if (!frames.length) return;
             const cur = selectedFrame ? frames.findIndex((f) => f.id === selectedFrame.id) : frames.length - 1;
-            setSelected(frames[Math.max(0, Math.min(cur + delta, frames.length - 1))]);
+            const next = frames[Math.max(0, Math.min(cur + delta, frames.length - 1))];
+            setSelected(next);
+            rememberFrame(day, next.id);
         },
-        [frames, selectedFrame],
+        [frames, selectedFrame, day],
     );
 
     useEffect(() => {
@@ -306,10 +322,12 @@ export function DaySurface({ baseUrl, day, onDayChange, onOpenSearch, seek, onSe
         (ts: number) => {
             if (!frames.length) return;
             userSelectedRef.current = true;
-            setSelected(frameNear(frames, ts));
+            const f = frameNear(frames, ts);
+            setSelected(f);
+            rememberFrame(day, f.id);
             setMediaPopup(null);
         },
-        [frames],
+        [frames, day],
     );
 
     const recapResult = recap.results["day-recap"] ?? recap.results["time-breakdown"];
@@ -671,6 +689,7 @@ export function DaySurface({ baseUrl, day, onDayChange, onOpenSearch, seek, onSe
                         onSelect={(f) => {
                             userSelectedRef.current = true;
                             setSelected(f);
+                            rememberFrame(day, f.id);
                         }}
                         onMediaOpen={setMediaPopup}
                         hits={hits}

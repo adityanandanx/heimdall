@@ -303,3 +303,107 @@ def test_ranges_clamped_to_known_length():
     assert closed.length == 100_000_000
     # [0, 95s] kept; the post-length seek span is clamped away entirely
     assert closed.ranges == [[0, 95_000_000]]
+
+
+# ---- Chromium throttled bursts: silence then a stale+caught-up pair (#repro) ----
+
+def test_chromium_throttled_burst_does_not_split_session():
+    """Chromium in a background tab updates in bursts: after a ~30s silence a
+    line carries a stale position, the next (1s later) the caught-up position,
+    and the pair differs on title/source. That is one continuous watch."""
+    t = SessionTracker()
+    _play(t, player="chromium.instance1", title="Quickshell bar on Hyprland",
+          source=None, position_us=0, wall_ms=0)
+    t.poll(player="chromium.instance1", position_us=0, wall_ms=30_000)
+    # burst: stale line (title loses the suffix, source still absent)
+    t.play(player="chromium.instance1", title="Quickshell bar on Hyprland",
+           source=None, position_us=0, wall_ms=60_001)
+    # burst: fresh line, same media, title/source differ, position caught up
+    t.play(player="chromium.instance1", title="Quickshell bar on Hyprland - Chromium",
+           source="https://www.youtube.com/watch?v=x", position_us=30_000_000, wall_ms=61_001)
+    assert t.open_sessions() == ["chromium.instance1"]
+    closed = t.stop(player="chromium.instance1", position_us=60_000_000, wall_ms=91_000)
+    assert closed is not None
+    assert closed.media_title == "Quickshell bar on Hyprland - Chromium"
+    assert closed.ts_end - closed.ts_start == 58_999  # silent video counted (~60s watched)
+    assert closed.ranges == [[0, 60_000_000]]
+
+
+def test_chromium_burst_with_real_track_switch_still_closes():
+    # a genuine switch: new title, position reset near 0 (backwards) closes
+    t = SessionTracker()
+    _play(t, player="chromium.instance1", title="First video", position_us=90_000_000, wall_ms=0)
+    t.poll(player="chromium.instance1", position_us=95_000_000, wall_ms=5_000)
+    closed = t.play(player="chromium.instance1", title="Second video",
+                    source=None, position_us=0, wall_ms=6_000)
+    assert closed is not None
+    assert closed.pos_start == 90_000_000
+    assert t.open_sessions() == ["chromium.instance1"]
+
+
+def test_chromium_flat_position_mismatch_still_closes():
+    # a mismatch without position progress (playlist track change) closes
+    t = SessionTracker()
+    _play(t, player="chromium.instance1", title="Track A", position_us=120_000_000, wall_ms=0)
+    t.poll(player="chromium.instance1", position_us=121_000_000, wall_ms=1_000)
+    closed = t.play(player="chromium.instance1", title="Track B",
+                    source=None, position_us=121_500_000, wall_ms=2_000)  # +0.5s in 1s wall
+    assert closed is not None
+    assert t.open_sessions() == ["chromium.instance1"]
+
+
+def test_pause_after_silent_stretch_accrues_watched_video():
+    # a pause line after throttled silence: position advanced far beyond the
+    # wall span between the last line and the pause -> banked into acc_wall
+    t = SessionTracker()
+    _play(t, player="chromium.instance1", title="Video", position_us=0, wall_ms=0)
+    # 29s of video happens while only 1s of wall passes between lines
+    _play(t, player="chromium.instance1", title="Video", source=None,
+          position_us=29_000_000, wall_ms=1_000)
+    t.pause(player="chromium.instance1", position_us=60_000_000, wall_ms=2_000)
+    s = t.snapshot()[0]
+    assert s.acc_wall_ms == 60_000 - 1_000  # 1s line span + 29s caught up + pause's 30s
+
+
+# ---- chromium tab-hide: stopped(0) suspends, absence stales ----
+
+def test_suspend_keeps_session_and_last_position():
+    t = SessionTracker()
+    _play(t, player="chromium", title="Video", source=None, position_us=50_000_000, wall_ms=0)
+    t.suspend(player="chromium", wall_ms=40_000)
+    s = t.snapshot()[0]
+    assert s.paused is True
+    assert s.last_pos_us == 50_000_000  # closed at the real position, not 0
+    assert s.acc_wall_ms == 40_000
+
+
+def test_suspend_then_playing_resumes_same_session():
+    t = SessionTracker()
+    _play(t, player="chromium", title="Video", source=None, position_us=50_000_000, wall_ms=0)
+    t.suspend(player="chromium", wall_ms=40_000)
+    _play(t, player="chromium", title="Video", source=None, position_us=50_000_000, wall_ms=46_000)
+    closed = t.stop(player="chromium", position_us=80_000_000, wall_ms=76_000)
+    assert closed is not None
+    assert closed.pos_start == 50_000_000
+    assert closed.ts_start == 0  # one continuous session across the hide
+    assert t.open_sessions() == []
+
+
+def test_stale_closes_paused_session_past_threshold():
+    t = SessionTracker()
+    _play(t, player="chromium", title="Video", source=None, position_us=50_000_000, wall_ms=0)
+    t.suspend(player="chromium", wall_ms=1_000)
+    assert t.stale(player="chromium", wall_ms=30_000) is None   # inside threshold
+    closed = t.stale(player="chromium", wall_ms=90_000)         # > 60s
+    assert closed is not None
+    assert closed.pos_end == 0  # no position known on a dead tab
+    assert closed.ranges == []
+
+
+def test_stale_closes_frozen_playing_session():
+    t = SessionTracker()
+    _play(t, player="chromium", title="Video", source=None, position_us=50_000_000, wall_ms=0)
+    assert t.stale(player="chromium", wall_ms=10_000) is None   # live, fresh
+    closed = t.stale(player="chromium", wall_ms=90_000)         # no lines for 90s
+    assert closed is not None
+    assert t.open_sessions() == []

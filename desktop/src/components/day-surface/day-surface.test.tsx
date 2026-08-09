@@ -1,15 +1,18 @@
 import { fireEvent, screen, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DaySurface } from "./day-surface";
 import { base, fixtureDay, resetFixtures } from "@/test/msw/handlers";
 import { shiftDay } from "@/lib/timeline";
+import { resetDaySelection } from "@/lib/day-selection";
 import { renderWithQuery } from "@/test/render";
+
+beforeEach(() => resetDaySelection());
 
 function renderDay(overrides: { day?: string } = {}) {
     const onDayChange = vi.fn();
     const onOpenSearch = vi.fn();
     const onSeekDone = vi.fn();
-    renderWithQuery(
+    const r = renderWithQuery(
         <DaySurface
             baseUrl={base}
             day={overrides.day ?? fixtureDay}
@@ -19,13 +22,14 @@ function renderDay(overrides: { day?: string } = {}) {
             onSeekDone={onSeekDone}
         />,
     );
-    return { onDayChange, onOpenSearch, onSeekDone };
+    return { onDayChange, onOpenSearch, onSeekDone, unmount: r.unmount };
 }
 
 describe("DaySurface #1 request", () => {
     afterEach(() => {
         vi.restoreAllMocks();
         resetFixtures();
+        resetDaySelection();
     });
 
     it("marks a frame as extracting… until its text extraction completes (#1)", async () => {
@@ -49,6 +53,21 @@ describe("DaySurface #1 request", () => {
         // Default selection: last frame (12:30:00).
         expect(screen.getByTestId("playhead-time")).toHaveTextContent("12:30:00");
         fireEvent.keyDown(window, { key: "ArrowLeft" });
+        await waitFor(() =>
+            expect(screen.getByTestId("playhead-time")).toHaveTextContent("12:00:00"),
+        );
+    });
+
+    it("restores the selected frame across remounts (tab switches) per day", async () => {
+        const { unmount } = renderDay();
+        await screen.findByText("⟳ synthesize");
+        fireEvent.keyDown(window, { key: "ArrowLeft" });
+        await waitFor(() =>
+            expect(screen.getByTestId("playhead-time")).toHaveTextContent("12:00:00"),
+        );
+        unmount(); // navigating away unmounts the surface…
+
+        renderDay(); // …and returning mounts it fresh
         await waitFor(() =>
             expect(screen.getByTestId("playhead-time")).toHaveTextContent("12:00:00"),
         );

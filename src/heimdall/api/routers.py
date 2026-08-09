@@ -63,9 +63,14 @@ def _session_iso(items: list[dict]) -> list[dict]:
 
     A live (in-progress) row stores ts_end=0; it renders as null so the preview
     can show a wall span against "now" instead of the epoch.
+
+    Session rows also gain ``ts`` (an alias of ts_start) so the unified
+    SearchItem shape — which the desktop reads for frame-like navigation —
+    never has to branch on kind.
     """
     for it in items:
         it["ts_start"] = ts_to_iso(it["ts_start"])
+        it["ts"] = it["ts_start"]
         if it.get("live") and it["ts_end"] == 0:
             it["ts_end"] = None
         else:

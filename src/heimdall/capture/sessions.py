@@ -126,23 +126,32 @@ class SessionTracker:
             return None
         if title != op.media_title or source != op.media_source:
             # a track switch while still "playing" ends the old session (MPRIS
-            # emits no stopped between them); the new track opens a fresh one
-            closed = self._close(player, None, wall_ms)
-            self._open[player] = _Open(
-                player=player,
-                media_title=title,
-                media_source=source,
-                media_id=media_id,
-                ts_start=wall_ms,
-                pos_start=position_us,
-                length=length_us,
-                range_start_us=position_us,
-                streak_start_wall_ms=wall_ms,
-                paused_at_wall_ms=None,
-                last_poll_wall_ms=wall_ms,
-                last_poll_pos_us=position_us,
-            )
-            return closed
+            # emits no stopped between them); the new track opens a fresh one.
+            # Chromium exempted: it updates metadata in throttled bursts, so the
+            # line after a stretch of silence differs on title/source while the
+            # position simply caught up (advanced at real-time pace, unseen).
+            # A backwards/flat position or a >2x burst is a genuine switch and
+            # still closes (the VLC midpoint continues too).
+            elapsed_s = max(0.0, (wall_ms - op.last_poll_wall_ms) / 1000)
+            caught_up = position_us - op.last_poll_pos_us >= (
+                wall_ms - op.last_poll_wall_ms) * 1000
+            if not caught_up or is_seek(op.last_poll_pos_us, position_us, elapsed_s):
+                closed = self._close(player, None, wall_ms)
+                self._open[player] = _Open(
+                    player=player,
+                    media_title=title,
+                    media_source=source,
+                    media_id=media_id,
+                    ts_start=wall_ms,
+                    pos_start=position_us,
+                    length=length_us,
+                    range_start_us=position_us,
+                    streak_start_wall_ms=wall_ms,
+                    paused_at_wall_ms=None,
+                    last_poll_wall_ms=wall_ms,
+                    last_poll_pos_us=position_us,
+                )
+                return closed
         op.media_title = title
         op.media_source = source
         op.media_id = media_id
@@ -150,9 +159,20 @@ class SessionTracker:
         op.streak_start_wall_ms = wall_ms
         op.paused_at_wall_ms = None
         elapsed_s = max(0.0, (wall_ms - op.last_poll_wall_ms) / 1000)
-        if is_seek(op.last_poll_pos_us, position_us, elapsed_s):
+        seek = is_seek(op.last_poll_pos_us, position_us, elapsed_s)
+        if seek:
             self._op_append_range(op, op.last_poll_pos_us)
             op.range_start_us = position_us
+        else:
+            # Throttled reporters (Chromium in a background tab) emit a line
+            # after a silent stretch whose position already advanced *more*
+            # video than the wall clock between the two lines. The close path
+            # only sees the 1s line-to-line span, so bank the difference now;
+            # never on a seek, which skipped exactly that video.
+            pos_adv_us = position_us - op.last_poll_pos_us
+            wall_adv_us = max(0, wall_ms - op.last_poll_wall_ms) * 1000
+            if pos_adv_us > wall_adv_us:
+                op.acc_wall_ms += (pos_adv_us - wall_adv_us) // 1000
         op.last_poll_wall_ms = wall_ms
         op.last_poll_pos_us = position_us
         return None
@@ -163,9 +183,45 @@ class SessionTracker:
         if op is None or op.paused_at_wall_ms is not None:
             return
         op.acc_wall_ms += wall_ms - op.streak_start_wall_ms
+        pos_adv_us = position_us - op.last_poll_pos_us
+        wall_adv_us = max(0, wall_ms - op.last_poll_wall_ms) * 1000
+        if pos_adv_us > wall_adv_us:
+            op.acc_wall_ms += (pos_adv_us - wall_adv_us) // 1000
         op.streak_start_wall_ms = None
         op.paused_at_wall_ms = wall_ms
         op.last_poll_pos_us = position_us
+
+    def suspend(self, player: str, wall_ms: int) -> None:
+        """A `stopped` with position 0 (Chromium when the tab hides).
+
+        The session stays open: hiding a tab emits stopped without ending the
+        media. Never touch the last known position, so the final range still
+        closes at the last real position instead of a stalled 0.
+        """
+        op = self._open.get(player)
+        if op is None or op.paused_at_wall_ms is not None:
+            return
+        op.acc_wall_ms += wall_ms - op.streak_start_wall_ms
+        op.streak_start_wall_ms = None
+        op.paused_at_wall_ms = wall_ms
+
+    def stale(self, player: str, wall_ms: int) -> Optional[WatchSession]:
+        """Presence-free fallback for players that deregister (hidden Chromium).
+
+        A paused session past the pause threshold closes exactly like `poll`;
+        a *playing* one whose position has been frozen past the threshold is a
+        dead player (window closed without a stopped line) and closes too.
+        """
+        op = self._open.get(player)
+        if op is None:
+            return None
+        if op.paused_at_wall_ms is not None:
+            if wall_ms - op.paused_at_wall_ms > self.pause_ends_session_s * 1000:
+                return self._close(player, None, wall_ms)
+            return None
+        if wall_ms - op.last_poll_wall_ms > self.pause_ends_session_s * 1000:
+            return self._close(player, None, wall_ms)
+        return None
 
     def poll(self, player: str, position_us: int, wall_ms: int) -> Optional[WatchSession]:
         """Periodic position poll (30s while a player is active).

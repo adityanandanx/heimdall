@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Event-driven capture daemon: grim (region JPEG) + tesseract (OCR worker queue)
+# Event-driven capture daemon: grim (region JPEG) + RapidOCR (OCR worker queue)
 # + playerctl (MPRIS tracks) + Hyprland socket2 listener. Foreground; Ctrl-C stops.
 #
 # Usage:  scripts/start-capture.sh [--config /path/to/config.yaml] [--log-dir ~/.heimdall/logs]

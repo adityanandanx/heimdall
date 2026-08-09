@@ -134,6 +134,9 @@ def test_search_kind_session_filter(api_client: TestClient, db):
         assert key in item
     assert item["media_title"] == "Inception (2010)"
     assert datetime.fromisoformat(item["ts_start"]).tzinfo is not None
+    # Items carry an alias `ts` (== ts_start) so surfaces can seek uniformly
+    # without branching on kind (#62 session-search result click → Invalid Date).
+    assert item["ts"] == item["ts_start"]
 
 
 def test_search_session_live_renders_null_ts_end(api_client: TestClient, db):

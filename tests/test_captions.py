@@ -303,7 +303,10 @@ def test_daemon_attaches_transcript_to_chromium_session(tmp_path):
     daemon = _daemon(tmp_path, tools)
     daemon._on_track(CHROMIUM_PLAY)
     daemon._watch_poll_once()  # CDP/extension enrich sets media_id (#44)
-    daemon._on_track(CHROMIUM_STOP)
+    daemon._on_track(CHROMIUM_STOP)  # tab hides: session stays open
+    daemon.tracker.pause_ends_session_s = -1.0
+    tools.players = []
+    daemon._watch_poll_once()  # tab gone past the threshold -> closes
 
     total, items = daemon.db.list_watch_sessions()
     assert total == 1

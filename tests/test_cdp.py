@@ -375,7 +375,7 @@ def test_watch_poll_enriches_chromium_session_with_cdp(tmp_path):
     daemon._on_track(STOPPED_CHROME)
     total, items = daemon.db.list_watch_sessions()
     assert total == 1
-    assert items[0]["live"] == 0
+    assert items[0]["live"] == 1  # a stopped(0) is a tab hide, not an end
     assert items[0]["media_source"] == YT_URL
     assert items[0]["media_id"] == YT_ID
 
@@ -397,7 +397,7 @@ def test_watch_poll_cdp_unreachable_keeps_title_only(tmp_path):
 
     daemon._on_track(STOPPED_CHROME)
     item = daemon.db.get_watch_session(items[0]["id"])
-    assert item["live"] == 0
+    assert item["live"] == 1  # tab hide keeps the session (CDP data intact)
     assert item["media_source"] is None
     assert item["media_id"] is None
 
