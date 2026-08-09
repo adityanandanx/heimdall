@@ -51,7 +51,10 @@ class WatchConfig:
     pause_ends_session_s: float = 60.0
     poll_interval_s: float = 30.0
     media_resolver: str = "extension"  # extension|cdp: how Chromium URLs are resolved (#44)
-    excluded_players: list = field(default_factory=lambda: ["sidra"])  # MPRIS players with no watch sessions (#47)
+    # #47 excluded MPRIS players that exposed no session data; sidra now
+    # reports title/artist/length via MPRIS, so music listens are captured
+    # like any other player. List own players to exclude instead.
+    excluded_players: list = field(default_factory=list)
     excluded_windows: list = field(default_factory=list)  # window_class values never captured (#72)
 
 

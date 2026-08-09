@@ -61,9 +61,9 @@ def test_watch_media_resolver_parses_cdp(tmp_path):
     assert cfg.watch.media_resolver == "cdp"
 
 
-def test_watch_excluded_players_defaults_to_sidra(tmp_path):
+def test_watch_excluded_players_defaults_to_none(tmp_path):
     cfg = load_config(_write(tmp_path, {"data_dir": str(tmp_path)}))
-    assert cfg.watch.excluded_players == ["sidra"]
+    assert cfg.watch.excluded_players == []
 
 
 def test_watch_excluded_players_parses(tmp_path):
@@ -79,7 +79,7 @@ def test_watch_excluded_players_non_list_ignored(tmp_path):
         "data_dir": str(tmp_path),
         "watch": {"excluded_players": "sidra"},
     }))
-    assert cfg.watch.excluded_players == ["sidra"]
+    assert cfg.watch.excluded_players == []
 
 
 def test_asr_defaults(tmp_path):
