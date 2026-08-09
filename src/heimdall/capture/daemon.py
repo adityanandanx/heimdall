@@ -484,6 +484,10 @@ class CaptureDaemon:
                 self.db.update_live_session(
                     row_id, ts_end=now_ms, pos_end=s.last_pos_us, ranges=s.ranges,
                 )
+                self.db.update_live_media(
+                    row_id, media_source=s.media_source, media_id=s.media_id,
+                    media_title=s.media_title,
+                )
         for player in [p for p in self._live_rows if p not in seen]:
             del self._live_rows[player]
 

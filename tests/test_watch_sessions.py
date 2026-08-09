@@ -169,6 +169,30 @@ def test_mid_play_track_switch_finalizes_old_and_opens_new_live_row(tmp_path):
     assert len(daemon.tracker.open_sessions()) == 1  # "Time" still open
 
 
+def test_sidra_track_switch_with_caught_up_position_splits_live_row(tmp_path):
+    """sidra keeps the same live row while the title ticks over (the position
+    keeps advancing at wall pace across the metadata change). The old song
+    must still finalize and a fresh row open for the new one (#regression:
+    sessions froze on the previous song when the track changed)."""
+    daemon = _daemon(tmp_path, _FakeWatchTools())
+    daemon._on_track(
+        "Playing|The Strokes|Going to Babble On|The New Abnormal|sidra|"
+        "100000000|246000000|https://music.apple.com/in/album/going-to-babble-on/1?i=2")
+    # new title, position still ticking at wall pace (a 1s step over 1s wall)
+    daemon._on_track(
+        "Playing|The Strokes|At The Door|The New Abnormal|sidra|"
+        "101000000|310000000|https://music.apple.com/in/album/at-the-door/3?i=4")
+
+    total, items = daemon.db.list_watch_sessions()
+    assert total == 2  # "Going to Babble On" finalized; "At The Door" live
+    by_live = {it["live"]: it for it in items}
+    old, new = by_live[0], by_live[1]
+    assert old["media_title"] == "Going to Babble On"
+    assert new["media_title"] == "At The Door"
+    assert new["player"] == "sidra"
+    assert new["ts_end"] == 0  # live row stays open
+
+
 def test_watch_poll_persists_on_player_exit(tmp_path):
     """A player that vanishes from `playerctl -l` closes + finalizes its session."""
     tools = _FakeWatchTools(players=["vlc"])

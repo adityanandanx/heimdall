@@ -127,15 +127,22 @@ class SessionTracker:
         if title != op.media_title or source != op.media_source:
             # a track switch while still "playing" ends the old session (MPRIS
             # emits no stopped between them); the new track opens a fresh one.
-            # Chromium exempted: it updates metadata in throttled bursts, so the
-            # line after a stretch of silence differs on title/source while the
-            # position simply caught up (advanced at real-time pace, unseen).
-            # A backwards/flat position or a >2x burst is a genuine switch and
-            # still closes (the VLC midpoint continues too).
+            # Only Chromium is exempt: it updates metadata in throttled bursts,
+            # so a title/source shift after a stretch of silence is usually the
+            # same video with the position caught up.
+            # Every other player streams per-second position ticks, so once the
+            # session is live the position only advances at wall pace; a
+            # metadata change there is a genuine track switch even when the
+            # position looks continuous (sidra's new title arrives while the
+            # old track's position still ticks, #regression).
             elapsed_s = max(0.0, (wall_ms - op.last_poll_wall_ms) / 1000)
-            caught_up = position_us - op.last_poll_pos_us >= (
-                wall_ms - op.last_poll_wall_ms) * 1000
-            if not caught_up or is_seek(op.last_poll_pos_us, position_us, elapsed_s):
+            burst_catchup = (
+                normalize_player(player) == "chromium"
+                and position_us - op.last_poll_pos_us
+                >= (wall_ms - op.last_poll_wall_ms) * 1000
+                and not is_seek(op.last_poll_pos_us, position_us, elapsed_s)
+            )
+            if not burst_catchup:
                 closed = self._close(player, None, wall_ms)
                 self._open[player] = _Open(
                     player=player,

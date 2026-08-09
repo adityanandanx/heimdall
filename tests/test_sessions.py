@@ -352,6 +352,28 @@ def test_chromium_flat_position_mismatch_still_closes():
     assert t.open_sessions() == ["chromium.instance1"]
 
 
+def test_non_chromium_metadata_change_with_continuous_position_closes():
+    """sidra reports per-second position ticks, so a metadata change is a real
+    track switch even when the position looks continuous; only Chromium's
+    throttled bursts keep the same session (#regression: sidra sessions froze
+    on the previous song while the title changed)."""
+    t = SessionTracker()
+    _play(t, player="sidra", title="Going to Babble On",
+          source="https://music.apple.com/in/album/going-to-babble-on/1?i=2",
+          position_us=100_000_000, wall_ms=1_000)
+    t.poll(player="sidra", position_us=101_000_000, wall_ms=2_000)
+    # new title, position advanced exactly at wall pace (= "caught up" under
+    # the old rule — that rule must not apply off-chromium)
+    closed = t.play(player="sidra", title="At The Door",
+                    source="https://music.apple.com/in/album/at-the-door/3?i=4",
+                    position_us=102_000_000, wall_ms=3_000)
+    assert closed is not None
+    assert closed.media_title == "Going to Babble On"
+    snap = next(s for s in t.snapshot() if s.player == "sidra")
+    assert snap.media_title == "At The Door"
+    assert snap.ts_start == 3_000  # fresh session for the new track
+
+
 def test_pause_after_silent_stretch_accrues_watched_video():
     # a pause line after throttled silence: position advanced far beyond the
     # wall span between the last line and the pause -> banked into acc_wall
