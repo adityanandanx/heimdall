@@ -1,5 +1,19 @@
 # heimdall
 
+<p align="center">
+  <img src="https://img.shields.io/badge/python-%3E%3D3.11-blue" alt="Python >= 3.11"/>
+  <img src="https://img.shields.io/badge/desktop-Tauri%202-orange" alt="Tauri 2 desktop client"/>
+  <img src="https://img.shields.io/badge/tooling-uv-9cf" alt="uv toolchain"/>
+  <img src="https://img.shields.io/badge/ocr-RapidOCR%2FOpenVINO-purple" alt="RapidOCR via OpenVINO"/>
+  <img src="https://img.shields.io/badge/privacy-local%20only-brightgreen" alt="local only"/>
+</p>
+
+> Made for myself, on my machine, against my habits. It is shaped around what
+> *I* run (Hyprland, Chromium, VLC, sidra, an Intel Meteor Lake laptop with NPU)
+> and the numbers below were all measured here. It is **not** a turnkey product:
+> treat it as a reference build and feel free to fork, copy, and change anything
+> to match your own setup — config, scripts, categories, cadence, all of it.
+
 Local, screen-only memory for Hyprland. A capture daemon listens to Hyprland's
 event socket and on window changes grim's the active-window region to JPEG and
 reads the window's a11y tree (AT-SPI) into SQLite (FTS5 searchable). When a
@@ -17,17 +31,70 @@ sessions, status and a settings surface that writes heimdall's own `config.yaml`
 live — OCR engine, exclusions, window rules, scheduled pipes, pause, forget —
 with no restart: the daemon and server hot-reload on a `settings.dirty` marker.
 
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/logo-white.png">
+    <img src="docs/images/logo-black.png" alt="heimdall logo" width="180"/>
+  </picture>
+</p>
+
 ## Screenshots
 
 <p align="center">
-  <img src="docs/images/screenshot_01.jpg" alt="Day timeline — captured frames with metadata and OCR text, plus the day strip" width="48%"/>
-  <img src="docs/images/screenshot_02.jpg" alt="Search — full-text search across a11y/OCR text and watch transcripts, with filters and scores" width="48%"/>
+  <img src="docs/images/screenshot_1.png" alt="Day timeline — captured frames with metadata and OCR text, plus the day strip" width="48%"/>
+  <img src="docs/images/screenshot_2.png" alt="Search — full-text search across a11y/OCR text and watch transcripts, with filters and scores" width="48%"/>
   <br/>
-  <img src="docs/images/screenshot_03.jpg" alt="Sessions — watch sessions with per-video stats, coverage and transcript" width="48%"/>
-  <img src="docs/images/screenshot_04.jpg" alt="Status — dashboard with server, capture daemon, LLM, players and data cards" width="48%"/>
+  <img src="docs/images/screenshot_3.png" alt="Sessions — watch sessions with per-video stats, coverage and transcript" width="48%"/>
+  <img src="docs/images/screenshot_4.png" alt="Status — dashboard with server, capture daemon, LLM, players and data cards" width="48%"/>
   <br/>
-  <img src="docs/images/screenshot_05.jpg" alt="Settings — server URL, auto-refresh, OCR engine, exclusions and window rules" width="48%"/>
+  <img src="docs/images/screenshot_5.png" alt="Settings — server URL, auto-refresh, OCR engine, exclusions and window rules" width="48%"/>
+  <img src="docs/images/screenshot_6.png" alt="(Screenshot 6 — verify alt text)" width="48%"/>
+  <br/>
+  <img src="docs/images/screenshot_7.png" alt="(Screenshot 7 — verify alt text)" width="48%"/>
 </p>
+
+The old `screenshot_0X.jpg` names are gone — images live as `screenshot_1.png`
+… `screenshot_7.png` in `docs/images/`.
+
+## Measured numbers (mine, not yours)
+
+> Disclaimer: everything below was measured on my hardware — Meteor Lake
+> laptop, Intel Arc GPU on the Vulkan backend, Intel NPU via OpenVINO for
+> RapidOCR, `gemma-4-E2B-it-qat-q4_0` on llama-server, `faster-whisper small`,
+> `int8`. Timings and thresholds depended on Chromium's MPRIS behavior at the
+> time; expect your numbers to differ.
+
+- **Capture cadence**: `debounce_s: 1.5` (window change → capture), `min_interval_s: 10`,
+  `keepalive_min: 5` base; the daemon publishes `capture.heartbeat` every 15s.
+- **Watch polling**: the poll loop runs every `watch.poll_interval_s: 30`; a
+  pause ends a session after `watch.pause_ends_session_s: 60`.
+- **The bug that shaped sessions** (fixed): Chromium in a background tab
+  throttles its MPRIS updates to ~one burst per ~30s. After a stretch of
+  silence it emits two lines ~1s apart — the first a stale position, the second
+  the caught-up one — and the pair differs on title/source. The tracker read
+  that as a track switch and closed+reopened the session every cycle: a 26:20
+  video became **30+ sessions**, each ~**1s of wall clock** wrapping ~**29s of
+  video**, all `pos_end=0`. Three mechanisms were splitting sessions:
+  1. metadata churn in the burst pair (tracker close-on-mismatch),
+  2. a `Stopped` line (position 0) whenever the tab hides,
+  3. Chromium deregistering its MPRIS instance while hidden (player-exit close).
+- **What the fix does**: a title/source mismatch only closes when the position
+  is NOT a real-time catch-up (no close if the position advanced at ≥1× wall);
+  `stopped`-with-0 from Chromium becomes a *suspension* (session stays open,
+  last position preserved); absence from `playerctl -l` never ends a Chromium
+  session — it closes only when silence outlasts the pause threshold. Wall-time
+  accrual for throttled reporters follows the video position advanced instead
+  of the 1s line-to-line span.
+- **Seek vs. playback**: a position jump counts as a seek only past
+  `elapsed × 2 + 30s` (up to 2× playback speed + poll noise); ranges split
+  there and the skipped video never counts as watched. Positions are µs, wall
+  is ms; only *closed* segments are persisted, so open ranges never leak.
+- **Desktop**: the Sessions tab polls the API every 15s (`FOLLOW_POLL_MS`) for
+  live rows; the server URL lives in Settings (`DEFAULT_SERVER_URL` is
+  `http://127.0.0.1:3931`, my device — the API itself binds 127.0.0.1:3030).
+- **Pipes**: day recap at `0 23 * * *`, time breakdown at `5 23 * * *`; the
+  breakdown merges the last N day-files deterministically (no extra LLM pass);
+  one of 8 fixed categories per window class.
 
 ## Requirements
 
@@ -120,6 +187,32 @@ daemon (15s poll) and the server re-read config live:
 transcripts in a time window in one transaction (FTS stays consistent via AFTER
 DELETE triggers; frame images and caption-cache files follow after commit).
 
+## Design decisions (why it's shaped this way)
+
+- **Screen-first, not clipboard/audio**: memory of what I *looked* at, in a
+  window — a11y text is cheap and exact, OCR only for blind windows, and the
+  phash change-gate skips re-extraction of unchanged keepalives.
+- **MPRIS is the watch-source of truth, not screen recording**: sessions are
+  (player, title, source) state machines with µs positions; ranges only
+  accumulate closed segments, seeks split them, rewinds never count, positions
+  clamp to the known length. The Chromium burst quirks above are handled at the
+  tracker level so the DB never sees fabricated fragments.
+- **Plain scripts, no systemd**: four `exec-once` lines in `hyprland.conf` (or
+  nothing — autostart is OFF by default); logs are stdout/stderr or
+  `--log-dir`. This is intentional: nothing to debug in a service manager, and
+  a crash gaps data visibly in the UI.
+- **API-only backend**: no HTML UI; the desktop client is a pure HTTP client
+  over a loopback-only server, so any HTTP client (or `curl`) can drive it.
+- **Settings as the spine**: a small writable surface (12 keys) that hot-reloads
+  without restarts, because capture/sessions/scheduler settings are meant to be
+  fiddled live while watching the effect.
+- **Deterministic pipes**: recap/breakdown output is idempotent and merges
+  deterministically (no LLM for the multi-day merge) so reruns never mutate
+  history.
+- **Local-or-bust**: NPU OCR when the hardware exists, local Gemma otherwise;
+  captions via `yt-dlp`, ASR only when there is no caption track. Nothing
+  leaves the machine (observability is off unless keys are set).
+
 ## Run (plain scripts — no systemd)
 
 ```sh
@@ -137,12 +230,12 @@ client is a pure HTTP client with the server URL in Settings
 Autostart is opt-in (default OFF) — one `exec-once` per piece in `hyprland.conf`:
 
 ```
-exec-once = ~/heimdall/scripts/start-llama.sh > ~/.heimdall/logs/llama.log 2>&1
-exec-once = ~/heimdall/scripts/start-capture.sh --log-dir ~/.heimdall/logs
+exec-once = ~/stuff/heimdall/scripts/start-llama.sh > ~/.heimdall/logs/llama.log 2>&1
+exec-once = ~/stuff/heimdall/scripts/start-capture.sh --log-dir ~/.heimdall/logs
 exec-once = uv run heimdall serve > ~/.heimdall/logs/serve.log 2>&1
 ```
 
-(paths assume the repo lives at `~/heimdall` — adjust to your checkout)
+(my checkout lives at `~/stuff/heimdall` — adjust the paths to your clone)
 
 A crashed capture gaps data until noticed; scheduled pipes only run while
 `serve` is up. Logs are per-terminal stdout/stderr or `~/.heimdall/logs/`.
@@ -194,22 +287,6 @@ Every command accepts the global `--config <path>` flag (default
 `breakdown --days N` merges the last N day-files deterministically (no extra
 LLM pass) into `output/time-breakdown-{endday}-{N}d.md`.
 
-## Verification checklist (run once after setup)
-
-- [ ] `scripts/start-llama.sh` starts; `curl -s localhost:8080/health` → ok; server log shows a **Vulkan** device (not CPU)
-- [ ] `scripts/start-capture.sh` runs; switch windows → wait ~2s → `sqlite3 ~/.heimdall/data.db 'select count(*) from frames;'` grows; a frame's `ocr_text` is populated within ~5s (OCR worker)
-- [ ] `cat ~/.heimdall/capture.engine` → `npu` or `cpu`; `heimdall status --json` → `capture.ocr_engine.active` matches
-- [ ] play/pause music → `select * from tracks;` rows appear with `playing`/`paused`
-- [ ] `heimdall serve` starts; `curl -s localhost:3030/health` → ok; `curl -s localhost:3030/settings` lists the 12 writable keys
-- [ ] `curl -X POST localhost:3030/settings -H 'Content-Type: application/json' -d '{"key":"capture.ocr_engine","value":"cpu"}'` → daemon reloads; flip back to `auto`
-- [ ] `heimdall status` shows server ok, capture alive, llama up, today's frame
-  count, extraction mode + OCR engine (configured/active), alive MPRIS players,
-  the last watch-session, scheduler next runs and pending ASR jobs
-- [ ] `heimdall search <word-you-saw>` returns a frame with a snippet and score
-- [ ] `heimdall recap yesterday` writes `output/day-recap-YYYY-MM-DD.md` with front matter (`date, range, generated_at, frame_count, trace_url`) and all three sections, no `ValidationError`
-- [ ] `heimdall breakdown --days 2` writes `output/time-breakdown-{endday}-2d.md` with summed minutes per category
-- [ ] rerun `heimdall run day-recap` overwrites the same-day file (idempotent)
-
 ## Tests
 
 ```sh
@@ -219,6 +296,28 @@ cd desktop && pnpm test        # desktop client (Vitest + RTL, MSW)
 
 Seams tested (backend): HTTP API (FTS search/ranking, frames, pipes,
 watch-sessions, settings + forget), pipe parse/render + deterministic merge,
-capture event/span math, the MPRIS watch-session state machine, the live
-settings spine. The real llama-server/Vulkan path and OCR accuracy are verified
-via the checklist above, not unit tests.
+capture event/span math, the MPRIS watch-session state machine (including the
+Chromium throttled-burst regressions), the live settings spine. The real
+llama-server/Vulkan path and OCR accuracy are verified via the checklist above,
+not unit tests.
+
+## How this project gets built (spec-driven development)
+
+Heimdall is developed spec-first: every workstream starts as a **wayfinder map**
+issue — a decision map of tickets that get resolved one at a time until the way
+is clear — then research/grilling tickets lock acceptance contracts, prototypes
+de-risk seams, and the final spec is implemented against. The current map for
+the media-capture side (watch-sessions, the extension URL contract, and the
+Chromium MPRIS quirks documented above) is:
+
+**[Map: media capture v3 — trustworthy MPRIS sessions, extension URLs, YouTube-only subtitles](https://github.com/adityanandanx/heimdall/issues/78)**
+
+and the other maps track the rest of the lifecycle: the screen-content pipeline
+([Map: Heimdall v2 — screen-content pipeline](https://github.com/adityanandanx/heimdall/issues/13)),
+the NPU OCR engine ([Map: NPU engine](https://github.com/adityanandanx/heimdall/issues/65)),
+and the desktop client ([Map: Heimdall desktop client — Tauri v1](https://github.com/adityanandanx/heimdall/issues/21)).
+Reading a map plus its resolved tickets shows *why* a subsystem looks the way it
+does — faster and cheaper than archaeology.
+
+Again: this all reflects my context. If you adopt any of it, expect to re-measure
+the numbers and re-decide the decisions for your own machine.
