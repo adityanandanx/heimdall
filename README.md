@@ -1,6 +1,13 @@
 # heimdall
 
 <p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/logo-white.png">
+    <img src="docs/images/logo-black.png" alt="heimdall logo" width="180"/>
+  </picture>
+</p>
+
+<p align="center">
   <img src="https://img.shields.io/badge/python-%3E%3D3.11-blue" alt="Python >= 3.11"/>
   <img src="https://img.shields.io/badge/desktop-Tauri%202-orange" alt="Tauri 2 desktop client"/>
   <img src="https://img.shields.io/badge/tooling-uv-9cf" alt="uv toolchain"/>
@@ -31,13 +38,6 @@ sessions, status and a settings surface that writes heimdall's own `config.yaml`
 live — OCR engine, exclusions, window rules, scheduled pipes, pause, forget —
 with no restart: the daemon and server hot-reload on a `settings.dirty` marker.
 
-<p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/images/logo-white.png">
-    <img src="docs/images/logo-black.png" alt="heimdall logo" width="180"/>
-  </picture>
-</p>
-
 ## Screenshots
 
 <p align="center">
@@ -52,9 +52,6 @@ with no restart: the daemon and server hot-reload on a `settings.dirty` marker.
   <br/>
   <img src="docs/images/screenshot_7.png" alt="(Screenshot 7 — verify alt text)" width="48%"/>
 </p>
-
-The old `screenshot_0X.jpg` names are gone — images live as `screenshot_1.png`
-… `screenshot_7.png` in `docs/images/`.
 
 ## Measured numbers (mine, not yours)
 
